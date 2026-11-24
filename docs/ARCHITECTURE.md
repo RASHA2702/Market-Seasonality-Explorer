@@ -99,7 +99,7 @@ not the customer.
   findings appear only as `ORDER_NOT_PERMITTED`, so a suspect is not tipped off.
 - Rejected-after-payment funds are held. Refunding them, or freezing and reporting them, is a person's
   decision (`ApproveRefundAfterRejection`) because the law may forbid a refund.
-- Limits are per order. Cumulative daily or monthly limits need a policy decision (see open questions).
+- Limits are per order. Cumulative daily or monthly limits are a policy decision (see docs/decisions.md, question 19).
 
 ## Idempotency and webhooks
 

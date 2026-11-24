@@ -23,7 +23,7 @@ and API are real and tested, but every bank, exchange, custodian and KYC provide
 | Tests and CI | 126 .NET tests, 15 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
-[docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
+[docs/decisions.md](docs/decisions.md).
 
 ## Run it locally
 
@@ -117,4 +117,4 @@ PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app PGDATABASE=gateway PGPASSWORD=yo
 | `src/FiatCryptoGateway.Sandbox` | Simulated providers and in-memory stores. Real adapters will sit beside it. |
 | `src/FiatCryptoGateway.Api` | HTTP API, API-key authentication, background order processing. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md) and [open questions](docs/OPEN_QUESTIONS.md). |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md) and [decisions](docs/decisions.md). |
