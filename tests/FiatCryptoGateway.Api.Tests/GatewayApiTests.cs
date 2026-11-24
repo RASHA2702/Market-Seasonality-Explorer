@@ -71,6 +71,16 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         Assert.Contains("sandbox-only", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("Gateway:Providers:anypartner:Environment", "Live")]
+    [InlineData("Gateway:Providers:anypartner:ApiKey", "sk_live_not_a_real_key")]
+    public void LiveProviderSettings_StopStartup(string key, string value)
+    {
+        using var host = factory.WithWebHostBuilder(builder => builder.UseSetting(key, value));
+
+        Assert.Throws<OptionsValidationException>(() => host.CreateClient());
+    }
+
     [Fact]
     public void MalformedApiKeyHash_StopsStartup()
     {

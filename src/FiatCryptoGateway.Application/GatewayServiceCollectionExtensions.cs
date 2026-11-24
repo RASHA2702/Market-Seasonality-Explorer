@@ -23,6 +23,12 @@ public static class GatewayServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<GatewaySafetyOptions>, GatewaySafetyGate>();
 
+        // Real provider adapters register a ProviderEnvironmentProfile; the guard refuses live credentials.
+        services.AddOptions<ProviderConnectionsOptions>()
+            .Bind(configuration.GetSection(GatewaySafetyOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<ProviderConnectionsOptions>, LiveCredentialGuard>();
+
         services.AddOptions<PricingOptions>()
             .Bind(configuration.GetSection(PricingOptions.SectionName))
             .ValidateOnStart();

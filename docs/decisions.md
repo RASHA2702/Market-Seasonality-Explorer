@@ -13,7 +13,8 @@ Last updated: 2026-11-24.
 
 ## Still needed from you
 
-- Question 11: choose a partner from the shortlist, then create its test-environment API keys.
+- Question 11: choose a partner from the shortlist, then create its test-environment API keys. The questions
+  to ask each candidate, and the settings you will provide, are in [partner-integration.md](partner-integration.md).
 - Question 6: a written AML/KYC policy.
 - Question 22: brand name and domain.
 - Question 25: renaming the repository.

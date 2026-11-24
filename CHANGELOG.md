@@ -1,5 +1,14 @@
 # Change log
 
+## 2026-11-24 — Live-credential guard and partner design (milestone item 4, part)
+
+- `LiveCredentialGuard` refuses, at startup, any provider configured for a non-test environment, a non-test
+  or non-HTTPS URL, a live-looking key, or a provider with no installed adapter. Messages never show key
+  values. Provider settings live at `Gateway:Providers:<name>`.
+- `docs/partner-integration.md`: the proposed partner interface, how the three flows map onto it, questions
+  for each candidate, and the environment variables to set. The partner adapter itself waits for the choice
+  of partner (decision 11).
+
 ## 2026-11-24 — Cumulative limits and country rule (milestone item 3)
 
 - Per-customer limits over a rolling 24 hours and 30 days for each KYC level, on top of the per-payment limit

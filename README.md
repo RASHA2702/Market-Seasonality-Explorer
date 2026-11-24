@@ -3,7 +3,8 @@
 A payment gateway that lets a customer pay in a fiat currency and receive crypto in their own wallet
 (an "on-ramp"). This repository is the **sandbox-only foundation**: the money handling, safety rules
 and API are real and tested, but every bank, exchange, custodian and KYC provider is simulated.
-**No real money can move**: the API refuses to start in any mode other than `Sandbox`.
+**No real money can move**: the API refuses to start in any mode other than `Sandbox`, and refuses any
+provider setting that looks live (a non-test environment or URL, or a live-looking key).
 
 > This repository was created as `Market-Seasonality-Explorer`. Consider renaming it on GitHub
 > (Settings → General → Repository name), for example to `fiat-crypto-gateway`.
@@ -152,4 +153,4 @@ PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app PGDATABASE=gateway PGPASSWORD=yo
 | `src/FiatCryptoGateway.Persistence.Postgres` | PostgreSQL stores, cross-instance order locks, and the migration runner. |
 | `src/FiatCryptoGateway.Api` | HTTP API, API-key authentication, background order processing. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md) and [decisions](docs/decisions.md). |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md) and the [partner integration design](docs/partner-integration.md). |
