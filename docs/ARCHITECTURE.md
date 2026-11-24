@@ -104,7 +104,11 @@ not the customer.
 - Reviewers use their own API keys (role `Reviewer`). The queue lists held orders longest-waiting first and
   flags any waiting longer than `Gateway:Compliance:ReviewSlaHours` (24). Every decision (approve, reject,
   freeze, release) needs a reason and is kept in an append-only log with the reviewer and time.
-- Limits are per order. Cumulative daily or monthly limits are a policy decision (see docs/decisions.md, question 19).
+- Limits per KYC level, in the pivot currency: per payment, per rolling 24 hours and per rolling 30 days
+  (placeholders until your policy sets them; docs/decisions.md, question 19). Expired and refunded orders
+  do not count. Order creation is serialised per customer, so simultaneous orders cannot slip past a limit.
+- Countries: `Gateway:Compliance:CountryMode` is `AllowList` (default, India only) or `BlockList`, and
+  `Gateway:Compliance:Countries` (for example `IN,AE`) replaces the default list.
 
 ## Idempotency and webhooks
 

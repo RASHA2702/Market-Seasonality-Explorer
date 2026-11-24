@@ -92,6 +92,7 @@ public sealed class OnRampServiceTests : IDisposable
     [Theory]
     [InlineData(SandboxCustomerDirectory.Unverified, Address, "KYC_REQUIRED")]
     [InlineData(SandboxCustomerDirectory.BlockedCountry, Address, "COUNTRY_NOT_SUPPORTED")]
+    [InlineData(SandboxCustomerDirectory.Foreign, Address, "COUNTRY_NOT_SUPPORTED")]
     [InlineData(SandboxCustomerDirectory.SanctionsMatch, Address, "ORDER_NOT_PERMITTED")]
     [InlineData(SandboxCustomerDirectory.Verified, SandboxWalletScreening.BlockedAddress, "ORDER_NOT_PERMITTED")]
     public async Task IneligibleOrders_AreRefusedBeforeAnyPayment(string customer, string address, string code)
@@ -142,6 +143,35 @@ public sealed class OnRampServiceTests : IDisposable
             order.ReviewActions.Select(action => action.Kind));
         var balances = LedgerBalances.Compute(await Ledger.ListAsync(order.OrderId, None));
         Assert.All(balances, balance => Assert.Equal(0m, balance.DebitMinusCredit));
+    }
+
+    [Fact]
+    public async Task DailyTotal_RefusesTheOrderThatWouldExceedItUntilTheWindowPasses()
+    {
+        // Basic KYC: 1,000 per payment, 2,000 per rolling day, 5,000 per rolling month.
+        await CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc);
+        await CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc);
+
+        var exception = await Assert.ThrowsAsync<GatewayRuleException>(() =>
+            CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc));
+        Assert.Equal("DAILY_LIMIT_EXCEEDED", exception.Code);
+
+        _time.Advance(TimeSpan.FromHours(25));
+        var order = await CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc);
+        Assert.Equal(OrderStatus.AwaitingFiatPayment, order.Status);
+    }
+
+    [Fact]
+    public async Task ExpiredOrders_DoNotCountTowardsLimits()
+    {
+        await CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc);
+        _time.Advance(TimeSpan.FromMinutes(16));
+        Assert.Equal(1, await OnRamp.ExpireOverdueOrdersAsync(None));
+
+        await CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc);
+        var second = await CreateOrderAsync(900m, currency: "USD", customer: SandboxCustomerDirectory.BasicKyc);
+
+        Assert.Equal(OrderStatus.AwaitingFiatPayment, second.Status);
     }
 
     [Fact]
@@ -298,10 +328,11 @@ public sealed class OnRampServiceTests : IDisposable
         decimal amount,
         string currency = "INR",
         string asset = "USDC@ethereum",
-        string address = Address)
+        string address = Address,
+        string customer = SandboxCustomerDirectory.Verified)
     {
         var quote = await QuoteAsync(amount, currency, asset);
-        return await OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, address), None);
+        return await OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, customer, address), None);
     }
 
     private Task<WebhookResult> PayAsync(PaymentOrder order, Money? amount = null)

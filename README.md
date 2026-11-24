@@ -17,7 +17,7 @@ and API are real and tested, but every bank, exchange, custodian and KYC provide
 | Quotes | Price route with freshness and no-look-ahead checks, service fee (rounded up), spread, network fee, crypto rounded down, min/max limits, 60-second expiry. |
 | Orders | Explicit state machine: fiat captured → compliance → buy → send → confirmations. Late or wrong-amount payments are refunded, never converted. |
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
-| Compliance | KYC level and limits, blocked countries, sanctions match, wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
+| Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
 | Tests and CI | 132 .NET tests (6 of them against a real PostgreSQL in Docker), 15 database constraint tests, and a secret scan, run on every push. |
@@ -100,8 +100,9 @@ export Gateway__ApiKeys__Clients__1__KeySha256=<sha256 of the reviewer key>
 export Gateway__ApiKeys__Clients__1__Role=Reviewer
 ```
 
-Sandbox test customers: `cust_verified`, `cust_basic` (1,000 USD limit), `cust_unverified`,
-`cust_sanctioned`, `cust_blocked_country`. Special wallet addresses that trigger compliance outcomes
+Sandbox test customers (all in India unless noted): `cust_verified`, `cust_basic` (1,000 USD per payment,
+2,000 per day, 5,000 per month), `cust_unverified`, `cust_sanctioned`, `cust_blocked_country` (North Korea)
+and `cust_foreign` (United Kingdom, refused by the India-only rule). Special wallet addresses that trigger compliance outcomes
 are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 
 ## API

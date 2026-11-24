@@ -67,6 +67,8 @@ customers pay on that page.
   refunded through a later, reasoned release.
 - **ANSWERED** (2026-11-24): Indian residents only. The gateway uses an allow-list containing only India and
   refuses everyone else. This replaces the placeholder blocked list (CU, IR, KP, SY).
+- Built: the country rule is an allow-list containing only India by default. Configuration replaces it, for
+  example `Gateway__Compliance__Countries=IN,AE`, or switches to a block-list.
 - Individual sanctions screening of payers is done by the partner (questions 17 and 18).
 - **[Lawyer]** Who files the report, and with whom, when the partner holds the money.
 
@@ -168,6 +170,8 @@ wallet-screening interface.
   | Full | 10,000 | 20,000 | 50,000 |
 
   Payments of 5,000 or more are held for a person to review.
+- Built: these limits are enforced per customer over a rolling 24 hours and 30 days, ignoring expired and
+  refunded orders. Each value is a setting (for example `Gateway__Compliance__BasicKycDailyLimit`).
 
 ## Commercials
 

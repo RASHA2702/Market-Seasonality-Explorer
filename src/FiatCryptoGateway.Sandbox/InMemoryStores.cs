@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Domain.Assets;
+using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Domain.Pricing;
@@ -78,6 +80,27 @@ public sealed class InMemoryOrderStore(InMemoryLedgerStore ledger) : IOrderStore
             .ToList()
             .AsReadOnly();
         return Task.FromResult(matches);
+    }
+
+    public Task<CustomerVolume> GetCustomerVolumeAsync(
+        string clientId,
+        string customerId,
+        AssetId pivotCurrency,
+        DateTimeOffset daySince,
+        DateTimeOffset monthSince,
+        Guid excludeOrderId,
+        CancellationToken cancellationToken)
+    {
+        var counted = _orders.Values
+            .Where(order => order.OrderId != excludeOrderId &&
+                            string.Equals(order.ClientId, clientId, StringComparison.Ordinal) &&
+                            string.Equals(order.CustomerId, customerId, StringComparison.Ordinal) &&
+                            order.Status is not (OrderStatus.Expired or OrderStatus.Refunded) &&
+                            order.Quote.PivotAmount.Asset.Id == pivotCurrency)
+            .ToList();
+        return Task.FromResult(new CustomerVolume(
+            counted.Where(order => order.CreatedAt >= daySince).Sum(order => order.Quote.PivotAmount.Amount),
+            counted.Where(order => order.CreatedAt >= monthSince).Sum(order => order.Quote.PivotAmount.Amount)));
     }
 }
 

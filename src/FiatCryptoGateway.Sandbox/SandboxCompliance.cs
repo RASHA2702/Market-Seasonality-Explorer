@@ -15,14 +15,17 @@ public sealed class SandboxCustomerDirectory : ICustomerDirectory
     public const string Unverified = "cust_unverified";
     public const string SanctionsMatch = "cust_sanctioned";
     public const string BlockedCountry = "cust_blocked_country";
+    public const string Foreign = "cust_foreign";
 
+    // Indian residents, matching the India-only launch, plus two outside India to exercise the country rule.
     private static readonly Dictionary<string, (KycLevel Level, string Country, bool Sanctions)> Customers = new(StringComparer.Ordinal)
     {
         [Verified] = (KycLevel.Full, "IN", false),
-        [BasicKyc] = (KycLevel.Basic, "GB", false),
-        [Unverified] = (KycLevel.None, "US", false),
-        [SanctionsMatch] = (KycLevel.Full, "DE", true),
+        [BasicKyc] = (KycLevel.Basic, "IN", false),
+        [Unverified] = (KycLevel.None, "IN", false),
+        [SanctionsMatch] = (KycLevel.Full, "IN", true),
         [BlockedCountry] = (KycLevel.Full, "KP", false),
+        [Foreign] = (KycLevel.Full, "GB", false),
     };
 
     public Task<CustomerProfile?> FindAsync(string clientId, string customerId, CancellationToken cancellationToken) =>

@@ -287,6 +287,44 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
         return ids.AsReadOnly();
     }
 
+    public async Task<CustomerVolume> GetCustomerVolumeAsync(
+        string clientId,
+        string customerId,
+        AssetId pivotCurrency,
+        DateTimeOffset daySince,
+        DateTimeOffset monthSince,
+        Guid excludeOrderId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(pivotCurrency);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT coalesce(sum(q.pivot_amount) FILTER (WHERE o.created_at >= @day_since), 0),
+                   coalesce(sum(q.pivot_amount) FILTER (WHERE o.created_at >= @month_since), 0)
+              FROM gateway.payment_order o
+              JOIN gateway.quote q USING (quote_id)
+             WHERE o.client_id = @client
+               AND o.customer_id = @customer
+               AND o.order_id <> @exclude
+               AND o.status <> ALL(@uncounted)
+               AND q.pivot_asset_key = @pivot
+               AND o.created_at >= @month_since
+            """,
+            connection);
+        command
+            .With("day_since", daySince.Utc())
+            .With("month_since", monthSince.Utc())
+            .With("client", clientId)
+            .With("customer", customerId)
+            .With("exclude", excludeOrderId)
+            .With("uncounted", new[] { DbNames.Of(OrderStatus.Expired), DbNames.Of(OrderStatus.Refunded) })
+            .With("pivot", pivotCurrency.ToString());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return new CustomerVolume(reader.GetDecimal(0), reader.GetDecimal(1));
+    }
+
     private static NpgsqlCommand BindState(NpgsqlCommand command, PaymentOrder order) =>
         command
             .With("id", order.OrderId)

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using FiatCryptoGateway.Application.Ports;
 
 namespace FiatCryptoGateway.Application.OnRamp;
@@ -32,4 +34,12 @@ public sealed class InMemoryOrderLocks : IOrderLocks
             return ValueTask.CompletedTask;
         }
     }
+}
+
+/// <summary>Lock keys for things other than a single order, in the same lock space as order IDs.</summary>
+public static class OrderLockKeys
+{
+    /// <summary>A stable key per customer, so their order creations run one at a time on every instance.</summary>
+    public static Guid Customer(string clientId, string customerId) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes($"customer\n{clientId}\n{customerId}")).AsSpan(0, 16));
 }

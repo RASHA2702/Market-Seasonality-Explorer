@@ -153,6 +153,57 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task CustomerVolume_CountsRecentLiveOrdersOnly()
+    {
+        var customer = $"cust_{Guid.NewGuid():N}";
+        var time = new ManualTimeProvider(Start);
+        await using var services = fixture.BuildServices(time);
+        var store = services.GetRequiredService<IOrderStore>();
+
+        var old = await AddOrderAsync(services, customer, time);          // 2 days ago: in the month, not the day
+        time.Advance(TimeSpan.FromDays(2));
+        var recent = await AddOrderAsync(services, customer, time);
+        var expired = await AddOrderAsync(services, customer, time);
+        var excluded = await AddOrderAsync(services, customer, time);      // the order being screened
+        Assert.True(expired.ExpireIfOverdue(expired.PaymentDeadline.AddSeconds(1)));
+        await store.SaveAsync(expired, [], None);
+        var now = time.GetUtcNow();
+
+        var volume = await store.GetCustomerVolumeAsync(
+            Client, customer, old.Quote.PivotAmount.Asset.Id, now.AddHours(-24), now.AddDays(-30), excluded.OrderId, None);
+
+        var each = recent.Quote.PivotAmount.Amount;
+        Assert.Equal(each, volume.LastDay);        // only "recent"
+        Assert.Equal(2 * each, volume.LastMonth);  // "recent" and "old"
+    }
+
+    [Fact]
+    public async Task SimultaneousOrders_CannotTogetherExceedADailyLimit()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var instanceA = fixture.BuildServices(time);
+        await using var instanceB = fixture.BuildServices(time);
+
+        // Basic KYC allows 2,000 USD per day: three 900 USD orders arrive at once on two instances.
+        var results = await Task.WhenAll(new[] { instanceA, instanceB, instanceA }.Select(async services =>
+        {
+            var onRamp = services.GetRequiredService<OnRampService>();
+            var quote = await onRamp.CreateQuoteAsync(Client, new CreateQuoteCommand("USD", 900m, "USDC@ethereum"), None);
+            try
+            {
+                await onRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.BasicKyc, Address), None);
+                return true;
+            }
+            catch (FiatCryptoGateway.Domain.GatewayRuleException exception) when (exception.Code == "DAILY_LIMIT_EXCEEDED")
+            {
+                return false;
+            }
+        }));
+
+        Assert.Equal(2, results.Count(created => created));
+    }
+
+    [Fact]
     public async Task DatabaseStateMachine_MatchesTheCode()
     {
         await using var services = fixture.BuildServices(TimeProvider.System);
@@ -236,6 +287,16 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
 
         var migrations = Path.Combine(directory?.FullName ?? throw new InvalidOperationException("Repository root not found."), "db", "migrations");
         return Directory.GetFiles(migrations, "*.sql").Select(Path.GetFileNameWithoutExtension).OfType<string>().Order(StringComparer.Ordinal);
+    }
+
+    /// <summary>Stores an order directly, for a customer ID no other test uses.</summary>
+    private static async Task<PaymentOrder> AddOrderAsync(ServiceProvider services, string customerId, TimeProvider time)
+    {
+        var quote = await services.GetRequiredService<OnRampService>()
+            .CreateQuoteAsync(Client, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
+        var order = PaymentOrder.Create(Guid.NewGuid(), Client, customerId, quote, Address, time.GetUtcNow(), TimeSpan.FromMinutes(15));
+        await services.GetRequiredService<IOrderStore>().AddAsync(order, None);
+        return order;
     }
 
     private static string DbName(OrderStatus status) => PascalBoundary().Replace(status.ToString(), "_$1").ToUpperInvariant();

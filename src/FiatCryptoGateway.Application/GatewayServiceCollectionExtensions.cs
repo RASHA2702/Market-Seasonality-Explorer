@@ -29,7 +29,9 @@ public static class GatewayServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<PricingOptions>, PricingOptionsValidator>();
 
         services.AddOptions<ComplianceOptions>()
-            .Bind(configuration.GetSection(ComplianceOptions.SectionName));
+            .Bind(configuration.GetSection(ComplianceOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<ComplianceOptions>, ComplianceOptionsValidator>();
 
         // Stores and IOrderLocks are registered by the chosen storage (in memory or PostgreSQL).
         services.TryAddSingleton(TimeProvider.System);

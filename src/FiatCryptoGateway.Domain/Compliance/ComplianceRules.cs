@@ -16,6 +16,15 @@ public enum ComplianceOutcome
     Rejected,
 }
 
+public enum CountryPolicyMode
+{
+    /// <summary>Only the listed countries may use the service.</summary>
+    AllowList,
+
+    /// <summary>Every country except the listed ones may use the service.</summary>
+    BlockList,
+}
+
 public enum WalletRisk
 {
     Low,
@@ -42,11 +51,23 @@ public sealed record ComplianceDecision(
     string Screener,
     DateTimeOffset DecidedAt);
 
-/// <summary>Per-order limits are in the pivot currency. Cumulative (daily/monthly) limits are not yet modelled.</summary>
+/// <summary>
+/// A customer's earlier payments, in the pivot currency: the last 24 hours and the last 30 days.
+/// Expired and refunded orders are not counted.
+/// </summary>
+public sealed record CustomerVolume(decimal LastDay, decimal LastMonth)
+{
+    public static CustomerVolume None { get; } = new(0m, 0m);
+}
+
+/// <summary>Limits per KYC level, in the pivot currency: per payment, per rolling day and per rolling month.</summary>
+public sealed record KycLimits(decimal PerPayment, decimal PerDay, decimal PerMonth);
+
 public sealed record CompliancePolicy(
-    IReadOnlySet<string> BlockedCountries,
-    decimal BasicKycLimit,
-    decimal FullKycLimit,
+    CountryPolicyMode CountryMode,
+    IReadOnlySet<string> Countries,
+    KycLimits Basic,
+    KycLimits Full,
     decimal ManualReviewThreshold);
 
 /// <summary>
@@ -59,11 +80,13 @@ public static class ComplianceRules
         CustomerProfile customer,
         WalletScreeningResult wallet,
         Money pivotAmount,
+        CustomerVolume volume,
         CompliancePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(customer);
         ArgumentNullException.ThrowIfNull(wallet);
         ArgumentNullException.ThrowIfNull(pivotAmount);
+        ArgumentNullException.ThrowIfNull(volume);
         ArgumentNullException.ThrowIfNull(policy);
 
         var rejections = new List<string>();
@@ -74,25 +97,39 @@ public static class ComplianceRules
             rejections.Add("CUSTOMER_SANCTIONS_MATCH");
         }
 
-        if (policy.BlockedCountries.Contains(customer.CountryCode))
+        var listed = policy.Countries.Contains(customer.CountryCode);
+        if (policy.CountryMode == CountryPolicyMode.AllowList ? !listed : listed)
         {
             rejections.Add("COUNTRY_NOT_SUPPORTED");
         }
 
-        var limit = customer.KycLevel switch
+        var limits = customer.KycLevel switch
         {
-            KycLevel.Basic => policy.BasicKycLimit,
-            KycLevel.Full => policy.FullKycLimit,
-            _ => 0m,
+            KycLevel.Basic => policy.Basic,
+            KycLevel.Full => policy.Full,
+            _ => null,
         };
 
-        if (customer.KycLevel == KycLevel.None)
+        if (limits is null)
         {
             rejections.Add("KYC_REQUIRED");
         }
-        else if (pivotAmount.Amount > limit)
+        else
         {
-            rejections.Add("KYC_LIMIT_EXCEEDED");
+            if (pivotAmount.Amount > limits.PerPayment)
+            {
+                rejections.Add("KYC_LIMIT_EXCEEDED");
+            }
+
+            if (volume.LastDay + pivotAmount.Amount > limits.PerDay)
+            {
+                rejections.Add("DAILY_LIMIT_EXCEEDED");
+            }
+
+            if (volume.LastMonth + pivotAmount.Amount > limits.PerMonth)
+            {
+                rejections.Add("MONTHLY_LIMIT_EXCEEDED");
+            }
         }
 
         switch (wallet.Risk)

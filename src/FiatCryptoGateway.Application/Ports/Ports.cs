@@ -90,6 +90,19 @@ public interface IOrderStore
     Task SaveAsync(PaymentOrder order, IReadOnlyList<JournalEntry> journalEntries, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<Guid>> FindByStatusAsync(IReadOnlyCollection<OrderStatus> statuses, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The customer's payments in the pivot currency since each cut-off, not counting expired or refunded
+    /// orders, payments priced in another pivot currency, or the order being screened.
+    /// </summary>
+    Task<CustomerVolume> GetCustomerVolumeAsync(
+        string clientId,
+        string customerId,
+        AssetId pivotCurrency,
+        DateTimeOffset daySince,
+        DateTimeOffset monthSince,
+        Guid excludeOrderId,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>

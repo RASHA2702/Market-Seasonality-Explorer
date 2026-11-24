@@ -16,6 +16,7 @@ namespace FiatCryptoGateway.Application.Compliance;
 public sealed partial class ComplianceScreeningService(
     ICustomerDirectory customers,
     IWalletScreening walletScreening,
+    IOrderStore orders,
     IOptions<ComplianceOptions> options,
     TimeProvider time,
     ILogger<ComplianceScreeningService> logger)
@@ -42,7 +43,10 @@ public sealed partial class ComplianceScreeningService(
             }
 
             var wallet = await walletScreening.ScreenAsync(destination, destinationAddress, cancellationToken);
-            var (outcome, reasons) = ComplianceRules.Evaluate(customer, wallet, pivotAmount, options.Value.ToPolicy());
+            var now = time.GetUtcNow();
+            var volume = await orders.GetCustomerVolumeAsync(
+                clientId, customerId, pivotAmount.Asset.Id, now.AddHours(-24), now.AddDays(-30), orderId, cancellationToken);
+            var (outcome, reasons) = ComplianceRules.Evaluate(customer, wallet, pivotAmount, volume, options.Value.ToPolicy());
             return new ComplianceDecision(orderId, outcome, reasons, wallet.Screener, time.GetUtcNow());
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

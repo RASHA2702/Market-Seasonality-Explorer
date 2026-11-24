@@ -1,13 +1,19 @@
+using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
+using Microsoft.Extensions.Configuration;
 
 namespace FiatCryptoGateway.Tests;
 
 public sealed class ComplianceRulesTests
 {
     private static readonly CompliancePolicy Policy = new(
-        new HashSet<string>(["KP", "IR"], StringComparer.Ordinal), BasicKycLimit: 1_000m, FullKycLimit: 10_000m, ManualReviewThreshold: 5_000m);
+        CountryPolicyMode.AllowList,
+        new HashSet<string>(["IN"], StringComparer.Ordinal),
+        Basic: new KycLimits(1_000m, 2_000m, 5_000m),
+        Full: new KycLimits(10_000m, 20_000m, 50_000m),
+        ManualReviewThreshold: 5_000m);
 
     [Fact]
     public void CleanVerifiedCustomer_IsApproved()
@@ -52,6 +58,40 @@ public sealed class ComplianceRulesTests
         Assert.Contains("AMOUNT_REQUIRES_REVIEW", reasons);
     }
 
+    [Theory]
+    [InlineData(1_500, 0, 600, "DAILY_LIMIT_EXCEEDED")]     // 1,500 today + 600 > 2,000
+    [InlineData(0, 4_800, 300, "MONTHLY_LIMIT_EXCEEDED")]   // 4,800 this month + 300 > 5,000
+    public void DailyAndMonthlyTotals_AreEnforced(int lastDay, int lastMonth, int amount, string reason)
+    {
+        var (outcome, reasons) = Evaluate(Customer(KycLevel.Basic), pivotAmount: amount, volume: new CustomerVolume(lastDay, Math.Max(lastDay, lastMonth)));
+
+        Assert.Equal(ComplianceOutcome.Rejected, outcome);
+        Assert.Equal([reason], reasons);
+    }
+
+    [Fact]
+    public void TotalsExactlyAtTheLimit_AreAllowed()
+    {
+        var (outcome, _) = Evaluate(Customer(KycLevel.Basic), pivotAmount: 500, volume: new CustomerVolume(1_500m, 4_500m));
+
+        Assert.Equal(ComplianceOutcome.Approved, outcome);
+    }
+
+    [Theory]
+    [InlineData(CountryPolicyMode.AllowList, "IN", "IN", true)]
+    [InlineData(CountryPolicyMode.AllowList, "IN", "GB", false)]
+    [InlineData(CountryPolicyMode.BlockList, "KP", "GB", true)]
+    [InlineData(CountryPolicyMode.BlockList, "KP", "KP", false)]
+    public void CountryRule_SupportsAllowAndBlockLists(CountryPolicyMode mode, string listed, string customerCountry, bool allowed)
+    {
+        var policy = Policy with { CountryMode = mode, Countries = new HashSet<string>([listed], StringComparer.Ordinal) };
+
+        var (_, reasons) = ComplianceRules.Evaluate(
+            Customer(country: customerCountry), new WalletScreeningResult(WalletRisk.Low, "test", null), new Money(100m, Fixtures.Usd), CustomerVolume.None, policy);
+
+        Assert.Equal(!allowed, reasons.Contains("COUNTRY_NOT_SUPPORTED"));
+    }
+
     [Fact]
     public void RejectionOutranksReview()
     {
@@ -66,8 +106,56 @@ public sealed class ComplianceRulesTests
     private static (ComplianceOutcome Outcome, IReadOnlyList<string> Reasons) Evaluate(
         CustomerProfile customer,
         WalletRisk risk = WalletRisk.Low,
-        int pivotAmount = 100) =>
-        ComplianceRules.Evaluate(customer, new WalletScreeningResult(risk, "test", null), new Money(pivotAmount, Fixtures.Usd), Policy);
+        int pivotAmount = 100,
+        CustomerVolume? volume = null) =>
+        ComplianceRules.Evaluate(
+            customer, new WalletScreeningResult(risk, "test", null), new Money(pivotAmount, Fixtures.Usd), volume ?? CustomerVolume.None, Policy);
+}
+
+public sealed class ComplianceOptionsTests
+{
+    [Fact]
+    public void DefaultCountryRule_IsIndiaOnly()
+    {
+        var options = Bind([]);
+
+        Assert.Equal(CountryPolicyMode.AllowList, options.CountryMode);
+        Assert.Equal(["IN"], options.EffectiveCountries);
+    }
+
+    [Fact]
+    public void ConfiguredCountries_ReplaceTheDefaultInsteadOfAddingToIt()
+    {
+        var options = Bind(new() { ["Countries"] = "ae, in" });
+
+        Assert.Equal(["AE", "IN"], options.EffectiveCountries.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void BlockListWithoutCountries_UsesThePlaceholderList()
+    {
+        var options = Bind(new() { ["CountryMode"] = "BlockList" });
+
+        Assert.Equal(["CU", "IR", "KP", "SY"], options.EffectiveCountries.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Countries", "IND")]
+    [InlineData("BasicKycDailyLimit", "500")]   // below the per-payment limit
+    [InlineData("FullKycMonthlyLimit", "1000")] // below the daily limit
+    public void InvalidSettings_AreRefusedAtStartup(string key, string value)
+    {
+        var result = new ComplianceOptionsValidator().Validate(null, Bind(new() { [key] = value }));
+
+        Assert.True(result.Failed);
+    }
+
+    private static ComplianceOptions Bind(Dictionary<string, string?> settings)
+    {
+        var options = new ComplianceOptions();
+        new ConfigurationBuilder().AddInMemoryCollection(settings).Build().Bind(options);
+        return options;
+    }
 }
 
 public sealed class WebhookSignatureTests

@@ -49,7 +49,7 @@ public sealed partial class OnRampService(
     // Reasons a client may see. Sanctions and wallet findings are reported only as ORDER_NOT_PERMITTED,
     // so the service does not tip off a customer who is under suspicion.
     private static readonly HashSet<string> ShareableRejectionReasons =
-        new(["KYC_REQUIRED", "KYC_LIMIT_EXCEEDED", "COUNTRY_NOT_SUPPORTED"], StringComparer.Ordinal);
+        new(["KYC_REQUIRED", "KYC_LIMIT_EXCEEDED", "DAILY_LIMIT_EXCEEDED", "MONTHLY_LIMIT_EXCEEDED", "COUNTRY_NOT_SUPPORTED"], StringComparer.Ordinal);
 
     public async Task<Quote> CreateQuoteAsync(string clientId, CreateQuoteCommand command, CancellationToken cancellationToken)
     {
@@ -103,6 +103,9 @@ public sealed partial class OnRampService(
         {
             throw new GatewayRuleException("INVALID_DESTINATION_ADDRESS", $"Not a valid {destination.Id} address.");
         }
+
+        // One order at a time per customer, so two simultaneous orders cannot both fit under a limit.
+        await using var customerLock = await locks.AcquireAsync(OrderLockKeys.Customer(clientId, command.CustomerId), cancellationToken);
 
         // Screen before taking the customer's money, so a payment is never collected for an order
         // that could not be completed. Screening runs again after payment.

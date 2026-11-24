@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-11-24 — Cumulative limits and country rule (milestone item 3)
+
+- Per-customer limits over a rolling 24 hours and 30 days for each KYC level, on top of the per-payment limit
+  (placeholders: basic 1,000 / 2,000 / 5,000 USD, full 10,000 / 20,000 / 50,000 USD). Expired and refunded
+  orders do not count. New rejection codes `DAILY_LIMIT_EXCEEDED` and `MONTHLY_LIMIT_EXCEEDED`.
+- Order creation is serialised per customer across instances, so simultaneous orders cannot exceed a limit;
+  a test races three orders on two instances.
+- The hard-coded blocked list is replaced by `Gateway:Compliance:CountryMode` (`AllowList` by default) and
+  `Gateway:Compliance:Countries`, which replaces the default (India only) instead of adding to it.
+  `BlockedCountries` is gone.
+- Compliance settings are validated at startup. Sandbox customers are now Indian residents, plus
+  `cust_foreign` (United Kingdom). Migration `004_customer_limits.sql` adds an index for the totals.
+
 ## 2026-11-24 — Reviewer queue and audit trail (milestone item 2)
 
 - Reviewer API keys (`Role: Reviewer`) and the `/v1/review` endpoints: a queue of held orders, longest-waiting
