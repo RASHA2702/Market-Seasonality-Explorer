@@ -1,0 +1,109 @@
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Options;
+
+namespace FiatCryptoGateway.Api.Auth;
+
+public sealed class ApiKeyClient
+{
+    public string ClientId { get; set; } = string.Empty;
+
+    /// <summary>Lower- or upper-case hex SHA-256 of the API key. The key itself is never stored.</summary>
+    public string KeySha256 { get; set; } = string.Empty;
+}
+
+public sealed class ApiKeyOptions
+{
+    public const string SectionName = "Gateway:ApiKeys";
+
+    public IList<ApiKeyClient> Clients { get; } = new List<ApiKeyClient>();
+}
+
+public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
+{
+    public ValidateOptionsResult Validate(string? name, ApiKeyOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var failures = new List<string>();
+        foreach (var client in options.Clients)
+        {
+            if (string.IsNullOrWhiteSpace(client.ClientId))
+            {
+                failures.Add("Every API client needs a ClientId.");
+            }
+
+            if (client.KeySha256.Length != 64 || !client.KeySha256.All(char.IsAsciiHexDigit))
+            {
+                failures.Add($"API client '{client.ClientId}' needs KeySha256: the 64-character hex SHA-256 of its key.");
+            }
+        }
+
+        if (options.Clients.Select(client => client.ClientId).Distinct(StringComparer.Ordinal).Count() != options.Clients.Count)
+        {
+            failures.Add("API client IDs must be unique.");
+        }
+
+        return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+}
+
+/// <summary>
+/// Authenticates <c>Authorization: Bearer &lt;key&gt;</c> by comparing the key's SHA-256 with configured
+/// hashes in constant time. Each key maps to one client ID; every resource is scoped to that client.
+/// </summary>
+public sealed class ApiKeyAuthenticationHandler(
+    IOptionsMonitor<AuthenticationSchemeOptions> options,
+    ILoggerFactory logger,
+    UrlEncoder encoder,
+    IOptions<ApiKeyOptions> keys)
+    : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+{
+    public const string SchemeName = "ApiKey";
+    public const string ClientIdClaim = "client_id";
+
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        const string prefix = "Bearer ";
+        var header = Request.Headers.Authorization.ToString();
+        if (!header.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return Task.FromResult(AuthenticateResult.NoResult());
+        }
+
+        var presented = SHA256.HashData(Encoding.UTF8.GetBytes(header[prefix.Length..].Trim()));
+        foreach (var client in keys.Value.Clients)
+        {
+            if (CryptographicOperations.FixedTimeEquals(presented, Convert.FromHexString(client.KeySha256)))
+            {
+                var identity = new ClaimsIdentity([new Claim(ClientIdClaim, client.ClientId)], SchemeName);
+                return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
+            }
+        }
+
+        return Task.FromResult(AuthenticateResult.Fail("Invalid API key."));
+    }
+}
+
+public static class ApiKeyAuthenticationExtensions
+{
+    public static IServiceCollection AddApiKeyAuthentication(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        services.AddOptions<ApiKeyOptions>().Bind(configuration.GetSection(ApiKeyOptions.SectionName)).ValidateOnStart();
+        services.AddSingleton<IValidateOptions<ApiKeyOptions>, ApiKeyOptionsValidator>();
+        services.AddAuthentication(ApiKeyAuthenticationHandler.SchemeName)
+            .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, configureOptions: null);
+        services.AddAuthorization();
+        return services;
+    }
+
+    public static string GetClientId(this ClaimsPrincipal user)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        return user.FindFirstValue(ApiKeyAuthenticationHandler.ClientIdClaim)
+            ?? throw new InvalidOperationException("An authenticated request must carry a client ID.");
+    }
+}

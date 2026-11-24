@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\FiatCryptoGateway.Application\FiatCryptoGateway.Application.csproj" />
+  </ItemGroup>
+</Project>

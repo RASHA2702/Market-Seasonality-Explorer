@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/iso4217.csv" LogicalName="FiatCryptoGateway.Domain.Assets.iso4217.csv" />
+  </ItemGroup>
+</Project>

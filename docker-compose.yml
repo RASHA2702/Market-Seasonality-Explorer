@@ -1,0 +1,24 @@
+# Local development only: a PostgreSQL instance for working on the schema in db/.
+# The sandbox API keeps its data in memory and does not need this yet.
+# Ports bind to 127.0.0.1 so the database is not reachable from other machines.
+services:
+  postgres:
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env (copy .env.example)}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env (copy .env.example)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - gateway_postgres:/var/lib/postgresql/data
+      # First start only. For an existing volume, run db/migrate.sh.
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  gateway_postgres:

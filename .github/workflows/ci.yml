@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore FiatCryptoGateway.sln
+      # Warnings are errors (Directory.Build.props), so analyzer findings fail the build.
+      - run: dotnet build FiatCryptoGateway.sln --no-restore --configuration Release
+      - run: dotnet test FiatCryptoGateway.sln --no-build --configuration Release
+
+  database:
+    name: Migrations and constraint tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_DB: gateway
+          POSTGRES_USER: gateway_ci
+          POSTGRES_PASSWORD: ci-only-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gateway_ci -d gateway"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: gateway
+      PGUSER: gateway_ci
+      PGPASSWORD: ci-only-throwaway
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply migrations
+        run: ./db/migrate.sh
+      - name: Re-running migrations is a no-op
+        run: |
+          ./db/migrate.sh | tee migrate.log
+          grep -q "Migrations applied: 0" migrate.log
+      - name: Constraint tests
+        run: |
+          for test in db/tests/*.sql; do
+            psql --no-psqlrc --quiet --set ON_ERROR_STOP=1 --file "$test"
+          done
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

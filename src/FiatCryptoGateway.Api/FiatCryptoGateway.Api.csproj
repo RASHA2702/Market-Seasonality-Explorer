@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="..\FiatCryptoGateway.Sandbox\FiatCryptoGateway.Sandbox.csproj" />
+  </ItemGroup>
+</Project>
