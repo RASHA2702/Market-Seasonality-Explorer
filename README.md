@@ -20,8 +20,9 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
+| Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 132 .NET tests (6 of them against a real PostgreSQL in Docker), 15 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 203 .NET tests (12 of them against a real PostgreSQL in Docker), 25 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -106,6 +107,60 @@ Sandbox test customers (all in India unless noted): `cust_verified`, `cust_basic
 and `cust_foreign` (United Kingdom, refused by the India-only rule). Special wallet addresses that trigger compliance outcomes
 are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 
+### Merchant webhooks
+
+To have a merchant notified of status changes, give its client a webhook URL and a signing secret. Generate
+the secret yourself (for example `openssl rand -hex 32`), share it with the merchant privately, and supply it
+through an environment variable or secret store, never a committed file:
+
+```bash
+export Gateway__ApiKeys__Clients__0__WebhookUrl=https://merchant.example/gateway-events
+export Gateway__ApiKeys__Clients__0__WebhookSecret=<at least 32 random characters>
+```
+
+The URL must be HTTPS (plain HTTP is accepted only for `localhost`, for testing). Each notification is a
+`POST` with two headers, `X-Gateway-Event-Id` and `X-Gateway-Signature` (`t=<unix seconds>,v1=<hex>`), and a
+JSON body:
+
+```json
+{
+  "id": "0d9a2c6e-5f4b-4e8a-9c1d-2b7e8f3a6c51",
+  "type": "order.status_changed",
+  "createdAt": "2026-11-24T12:01:00+00:00",
+  "data": {
+    "orderId": "8d5ec9aa-c585-4c92-a010-94b991bf4394",
+    "sequence": 2,
+    "status": "FiatReceived",
+    "previousStatus": "AwaitingFiatPayment",
+    "reason": "FIAT_CAPTURED",
+    "occurredAt": "2026-11-24T12:01:00+00:00"
+  }
+}
+```
+
+`sequence` numbers the order's steps as the merchant sees them, matching `GET /v1/orders/{id}`. Compliance
+steps appear only as `OnHold`. Any 2xx answer counts as delivered; redirects are not followed. Delivery is
+at least once, so the merchant should ignore an `id` it has already processed. The merchant verifies the
+signature over the raw body before parsing it, for example in Python:
+
+```python
+import hashlib, hmac, time
+
+def verify(secret: str, header: str, raw_body: bytes, tolerance_seconds: int = 300) -> bool:
+    parts = [part.split("=", 1) for part in header.split(",") if "=" in part]
+    timestamp = next((int(value) for key, value in parts if key == "t" and value.isdigit()), None)
+    if timestamp is None or abs(time.time() - timestamp) > tolerance_seconds:
+        return False
+    expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + raw_body, hashlib.sha256).hexdigest()
+    return any(key == "v1" and hmac.compare_digest(expected, value) for key, value in parts)
+```
+
+A failed delivery is retried after 30 seconds, then 1, 2, 4, 8, 16 and 32 minutes, then hourly, up to 10
+attempts (about 3 hours), after which it is recorded as given up. A later notification for the same order waits
+until the earlier one is delivered or given up. These and other settings are under `Gateway:Webhooks`
+(`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
+`IntervalSeconds`, `Enabled`).
+
 ## API
 
 | Method and path | Purpose |
@@ -119,6 +174,7 @@ are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 | `POST /v1/sandbox/orders/{id}/pay`, `/confirm` | Simulate the customer's payment and on-chain confirmations. |
 | `GET /v1/review/queue`, `GET /v1/review/orders/{id}` | Reviewer keys only: held payments, longest-waiting first, with an overdue flag; full screening reasons and the review log. |
 | `POST /v1/review/orders/{id}/approve`, `/reject`, `/freeze`, `/release` | Reviewer decisions. Each needs a `reason`; `/freeze` also needs the `reportReference` of the report filed. |
+| `GET /v1/review/orders/{id}/webhooks` | Reviewer keys only: each merchant notification for the order, with its delivery state, attempts and last error. |
 | `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
 
 Errors are `{"error":{"code":"...","message":"..."}}` with stable codes such as `QUOTE_EXPIRED`,
@@ -140,7 +196,7 @@ PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app PGDATABASE=gateway PGPASSWORD=yo
 ```
 
 ```bash
-PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app PGDATABASE=gateway PGPASSWORD=your-local-password psql --set ON_ERROR_STOP=1 --file db/tests/001_gateway_constraints.sql
+for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app PGDATABASE=gateway PGPASSWORD=your-local-password psql --set ON_ERROR_STOP=1 --file "$test"; done
 ```
 
 ## Layout

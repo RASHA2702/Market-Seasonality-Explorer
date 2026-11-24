@@ -17,6 +17,15 @@ public sealed class ApiKeyClient
 
     /// <summary><c>Merchant</c> (default) creates payments; <c>Reviewer</c> works the compliance queue.</summary>
     public string Role { get; set; } = nameof(ApiClientRole.Merchant);
+
+    /// <summary>Where order status changes are posted (merchants only). HTTPS, or HTTP to this machine for local testing.</summary>
+    public Uri? WebhookUrl { get; set; }
+
+    /// <summary>
+    /// The secret notifications are signed with, at least 32 characters, shared with the merchant out of band.
+    /// Supply it through an environment variable or a secret store, never in a committed file.
+    /// </summary>
+    public string? WebhookSecret { get; set; }
 }
 
 public static class ApiPolicies
@@ -54,6 +63,8 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
             {
                 failures.Add($"API client '{client.ClientId}' has role '{client.Role}'; use Merchant or Reviewer.");
             }
+
+            ValidateWebhook(client, failures);
         }
 
         if (options.Clients.Select(client => client.ClientId).Distinct(StringComparer.Ordinal).Count() != options.Clients.Count)
@@ -62,6 +73,32 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    // Messages name the client and the rule, never the URL's query or the secret.
+    private static void ValidateWebhook(ApiKeyClient client, List<string> failures)
+    {
+        if (client.WebhookUrl is null && client.WebhookSecret is null)
+        {
+            return;
+        }
+
+        if (client.Role != nameof(ApiClientRole.Merchant))
+        {
+            failures.Add($"API client '{client.ClientId}' is not a merchant, so it cannot receive webhooks.");
+        }
+
+        if (client.WebhookUrl is not { IsAbsoluteUri: true } url ||
+            !(url.Scheme == Uri.UriSchemeHttps || (url.Scheme == Uri.UriSchemeHttp && url.IsLoopback)) ||
+            !string.IsNullOrEmpty(url.UserInfo))
+        {
+            failures.Add($"API client '{client.ClientId}' needs WebhookUrl: an absolute HTTPS URL without credentials (HTTP only to localhost).");
+        }
+
+        if (client.WebhookSecret is not { Length: >= 32 } secret || string.IsNullOrWhiteSpace(secret))
+        {
+            failures.Add($"API client '{client.ClientId}' needs WebhookSecret: at least 32 characters, from an environment variable or secret store.");
+        }
     }
 }
 

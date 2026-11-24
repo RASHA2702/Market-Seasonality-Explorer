@@ -38,6 +38,8 @@ public static class SandboxServiceCollectionExtensions
     {
         services.AddSingleton<InMemoryLedgerStore>();
         services.AddSingleton<ILedgerStore>(provider => provider.GetRequiredService<InMemoryLedgerStore>());
+        services.AddSingleton<InMemoryOutbox>();
+        services.AddSingleton<IOutbox>(provider => provider.GetRequiredService<InMemoryOutbox>());
         services.AddSingleton<IQuoteStore, InMemoryQuoteStore>();
         services.AddSingleton<IOrderStore, InMemoryOrderStore>();
         services.AddSingleton<IIdempotencyStore, InMemoryIdempotencyStore>();

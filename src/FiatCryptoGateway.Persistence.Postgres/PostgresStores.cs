@@ -1,4 +1,5 @@
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Ledger;
@@ -75,6 +76,7 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
         }
 
         await InsertHistoryAsync(connection, transaction, order, storedEvents: 0, storedDecisions: 0, storedReviews: 0, cancellationToken);
+        await OutboxRows.InsertAsync(connection, transaction, MerchantNotifications.ForNewEvents(order, storedEvents: 0), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         order.Version = 0;
     }
@@ -134,6 +136,7 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
 
         await InsertHistoryAsync(connection, transaction, order, storedEvents, storedDecisions, storedReviews, cancellationToken);
         await LedgerRows.InsertAsync(connection, transaction, journalEntries, cancellationToken);
+        await OutboxRows.InsertAsync(connection, transaction, MerchantNotifications.ForNewEvents(order, storedEvents), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         order.Version = storedVersion + 1;
     }
@@ -555,6 +558,143 @@ public sealed class PostgresWebhookInbox(NpgsqlDataSource dataSource) : IWebhook
             "DELETE FROM ops.webhook_inbox WHERE provider = @provider AND event_id = @event_id",
             connection);
         command.With("provider", provider).With("event_id", eventId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+}
+
+internal static class OutboxRows
+{
+    public static async Task InsertAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        IEnumerable<OutboxMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        foreach (var message in messages)
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                INSERT INTO ops.outbox_message (
+                    message_id, aggregate_type, aggregate_id, client_id, event_sequence, event_type, payload, occurred_at, next_attempt_at)
+                VALUES (@id, 'payment_order', @order_id, @client, @sequence, @type, @payload, @occurred_at, @occurred_at)
+                """,
+                connection,
+                transaction);
+            command
+                .With("id", message.MessageId)
+                .With("order_id", message.OrderId)
+                .With("client", message.ClientId)
+                .With("sequence", message.Sequence)
+                .With("type", message.EventType)
+                .WithJson("payload", message.Payload)
+                .With("occurred_at", message.OccurredAt.Utc());
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+}
+
+/// <summary>
+/// Claims use <c>FOR UPDATE SKIP LOCKED</c> and a lease, so two instances never send the same message at once;
+/// each order's messages go out in sequence.
+/// </summary>
+public sealed class PostgresOutbox(NpgsqlDataSource dataSource) : IOutbox
+{
+    public async Task<IReadOnlyList<OutboxMessage>> ClaimDueAsync(DateTimeOffset now, TimeSpan lease, int limit, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            WITH next_per_order AS (
+                SELECT DISTINCT ON (aggregate_id) message_id
+                  FROM ops.outbox_message
+                 WHERE published_at IS NULL AND dead_at IS NULL
+                 ORDER BY aggregate_id, event_sequence
+            ), due AS (
+                SELECT m.message_id
+                  FROM ops.outbox_message m
+                  JOIN next_per_order n USING (message_id)
+                 WHERE m.next_attempt_at <= @now AND m.published_at IS NULL AND m.dead_at IS NULL -- rechecked once locked
+                 ORDER BY m.next_attempt_at
+                 LIMIT @limit
+                   FOR UPDATE OF m SKIP LOCKED
+            )
+            UPDATE ops.outbox_message o
+               SET next_attempt_at = @lease_until
+              FROM due
+             WHERE o.message_id = due.message_id
+            RETURNING o.message_id, o.client_id, o.aggregate_id, o.event_sequence, o.event_type, o.payload::text, o.attempts, o.occurred_at
+            """,
+            connection);
+        command.With("now", now.Utc()).With("limit", limit).With("lease_until", (now + lease).Utc());
+        var messages = new List<OutboxMessage>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            messages.Add(new OutboxMessage(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetGuid(2),
+                reader.GetInt32(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetFieldValue<DateTimeOffset>(7)));
+        }
+
+        return messages.AsReadOnly();
+    }
+
+    public Task MarkDeliveredAsync(Guid messageId, DateTimeOffset at, CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            "UPDATE ops.outbox_message SET attempts = attempts + 1, published_at = @at WHERE message_id = @id",
+            command => command.With("at", at.Utc()).With("id", messageId),
+            cancellationToken);
+
+    public Task ScheduleRetryAsync(Guid messageId, DateTimeOffset nextAttemptAt, string failure, CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            "UPDATE ops.outbox_message SET attempts = attempts + 1, next_attempt_at = @next, last_error = @failure WHERE message_id = @id",
+            command => command.With("next", nextAttemptAt.Utc()).With("failure", failure).With("id", messageId),
+            cancellationToken);
+
+    public Task MarkDeadAsync(Guid messageId, string failure, DateTimeOffset at, CancellationToken cancellationToken) =>
+        ExecuteAsync(
+            "UPDATE ops.outbox_message SET attempts = attempts + 1, dead_at = @at, last_error = @failure WHERE message_id = @id",
+            command => command.With("at", at.Utc()).With("failure", failure).With("id", messageId),
+            cancellationToken);
+
+    public async Task<IReadOnlyList<OutboxMessageStatus>> ListForOrderAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT message_id, event_sequence, attempts, published_at, dead_at, last_error
+              FROM ops.outbox_message
+             WHERE aggregate_id = @order_id
+             ORDER BY event_sequence
+            """,
+            connection);
+        command.With("order_id", orderId);
+        var statuses = new List<OutboxMessageStatus>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            statuses.Add(new OutboxMessageStatus(
+                reader.GetGuid(0),
+                reader.GetInt32(1),
+                reader.GetInt32(2),
+                reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+                reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
+        }
+
+        return statuses.AsReadOnly();
+    }
+
+    private async Task ExecuteAsync(string sql, Action<NpgsqlCommand> bind, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection);
+        bind(command);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

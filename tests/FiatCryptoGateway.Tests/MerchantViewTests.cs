@@ -30,6 +30,9 @@ public sealed class MerchantViewTests
                 ("RefundPending", "Refunded", "FIAT_REFUNDED"),
             ],
             events.Select(e => (e.From, e.To, e.Reason)));
+        // Numbered on their own: gaps in the internal numbers (7 events here) would hint at hidden steps.
+        Assert.Equal([1, 2, 3, 4, 5], events.Select(e => e.Sequence));
+        Assert.Equal(7, order.Events.Count);
         Assert.Equal("Refunded", MerchantView.Status(order.Status));
     }
 

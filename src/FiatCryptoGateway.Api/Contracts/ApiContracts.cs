@@ -1,5 +1,6 @@
 using System.Globalization;
 using FiatCryptoGateway.Application.OnRamp;
+using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
@@ -125,6 +126,25 @@ public sealed record OrderResponse(
             order.Transfer?.TransactionHash,
             order.Confirmations,
             [.. events]);
+    }
+}
+
+/// <summary>One merchant notification and how its delivery went (reviewer view).</summary>
+public sealed record WebhookDeliveryResponse(
+    Guid EventId,
+    int OrderEventSequence,
+    string Status,
+    int Attempts,
+    DateTimeOffset? DeliveredAt,
+    DateTimeOffset? GaveUpAt,
+    string? LastError)
+{
+    public static WebhookDeliveryResponse From(OutboxMessageStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        var state = status.DeliveredAt is not null ? "Delivered" : status.DeadAt is not null ? "GaveUp" : "Pending";
+        return new WebhookDeliveryResponse(
+            status.MessageId, status.Sequence, state, status.Attempts, status.DeliveredAt, status.DeadAt, status.LastError);
     }
 }
 

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Ledger;
@@ -34,17 +35,24 @@ public sealed class InMemoryQuoteStore : IQuoteStore
         Task.FromResult(_consumedBy.TryAdd(quoteId, orderId));
 }
 
-public sealed class InMemoryOrderStore(InMemoryLedgerStore ledger) : IOrderStore
+public sealed class InMemoryOrderStore(InMemoryLedgerStore ledger, InMemoryOutbox outbox) : IOrderStore
 {
     private readonly ConcurrentDictionary<Guid, PaymentOrder> _orders = new();
+    private readonly ConcurrentDictionary<Guid, int> _storedEvents = new();
     private readonly Lock _saveGate = new();
 
     public Task AddAsync(PaymentOrder order, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(order);
-        if (!_orders.TryAdd(order.OrderId, order))
+        lock (_saveGate)
         {
-            throw new InvalidOperationException($"Order {order.OrderId} already exists.");
+            if (!_orders.TryAdd(order.OrderId, order))
+            {
+                throw new InvalidOperationException($"Order {order.OrderId} already exists.");
+            }
+
+            outbox.Enqueue(MerchantNotifications.ForNewEvents(order, storedEvents: 0));
+            _storedEvents[order.OrderId] = order.Events.Count;
         }
 
         return Task.CompletedTask;
@@ -66,6 +74,8 @@ public sealed class InMemoryOrderStore(InMemoryLedgerStore ledger) : IOrderStore
             }
 
             ledger.AppendAll(journalEntries);
+            outbox.Enqueue(MerchantNotifications.ForNewEvents(order, _storedEvents[order.OrderId]));
+            _storedEvents[order.OrderId] = order.Events.Count;
         }
 
         return Task.CompletedTask;
@@ -183,4 +193,104 @@ public sealed class InMemoryStorageInitializer : IStorageInitializer
 {
     public Task InitializeAsync(IEnumerable<Domain.Assets.Asset> assets, IEnumerable<ApiClientRecord> clients, CancellationToken cancellationToken) =>
         Task.CompletedTask;
+}
+
+/// <summary>Process-memory outbox with the same delivery rules as the PostgreSQL one.</summary>
+public sealed class InMemoryOutbox : IOutbox
+{
+    private readonly List<Entry> _entries = [];
+    private readonly Lock _gate = new();
+
+    public Task<IReadOnlyList<OutboxMessage>> ClaimDueAsync(DateTimeOffset now, TimeSpan lease, int limit, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            var claimed = _entries
+                .Where(entry => entry.DeliveredAt is null && entry.DeadAt is null)
+                .GroupBy(entry => entry.Message.OrderId)
+                .Select(order => order.OrderBy(entry => entry.Message.Sequence).First())
+                .Where(entry => entry.NextAttemptAt <= now)
+                .OrderBy(entry => entry.NextAttemptAt)
+                .Take(limit)
+                .ToList();
+            foreach (var entry in claimed)
+            {
+                entry.NextAttemptAt = now + lease;
+            }
+
+            IReadOnlyList<OutboxMessage> messages = claimed.Select(entry => entry.Message with { Attempts = entry.Attempts }).ToList().AsReadOnly();
+            return Task.FromResult(messages);
+        }
+    }
+
+    public Task MarkDeliveredAsync(Guid messageId, DateTimeOffset at, CancellationToken cancellationToken) =>
+        Update(messageId, entry =>
+        {
+            entry.Attempts++;
+            entry.DeliveredAt = at;
+        });
+
+    public Task ScheduleRetryAsync(Guid messageId, DateTimeOffset nextAttemptAt, string failure, CancellationToken cancellationToken) =>
+        Update(messageId, entry =>
+        {
+            entry.Attempts++;
+            entry.NextAttemptAt = nextAttemptAt;
+            entry.LastError = failure;
+        });
+
+    public Task MarkDeadAsync(Guid messageId, string failure, DateTimeOffset at, CancellationToken cancellationToken) =>
+        Update(messageId, entry =>
+        {
+            entry.Attempts++;
+            entry.DeadAt = at;
+            entry.LastError = failure;
+        });
+
+    public Task<IReadOnlyList<OutboxMessageStatus>> ListForOrderAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<OutboxMessageStatus> statuses = _entries
+                .Where(entry => entry.Message.OrderId == orderId)
+                .OrderBy(entry => entry.Message.Sequence)
+                .Select(entry => new OutboxMessageStatus(
+                    entry.Message.MessageId, entry.Message.Sequence, entry.Attempts, entry.DeliveredAt, entry.DeadAt, entry.LastError))
+                .ToList()
+                .AsReadOnly();
+            return Task.FromResult(statuses);
+        }
+    }
+
+    internal void Enqueue(IEnumerable<OutboxMessage> messages)
+    {
+        lock (_gate)
+        {
+            _entries.AddRange(messages.Select(message => new Entry(message) { NextAttemptAt = message.OccurredAt }));
+        }
+    }
+
+    private Task Update(Guid messageId, Action<Entry> change)
+    {
+        lock (_gate)
+        {
+            change(_entries.Single(entry => entry.Message.MessageId == messageId));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private sealed class Entry(OutboxMessage message)
+    {
+        public OutboxMessage Message { get; } = message;
+
+        public DateTimeOffset NextAttemptAt { get; set; }
+
+        public int Attempts { get; set; }
+
+        public DateTimeOffset? DeliveredAt { get; set; }
+
+        public DateTimeOffset? DeadAt { get; set; }
+
+        public string? LastError { get; set; }
+    }
 }

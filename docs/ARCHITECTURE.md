@@ -123,6 +123,33 @@ not the customer.
 - Liquidity, custody and refund calls must be idempotent per order ID: a retried send never sends twice.
   The sandbox enforces this and a test reprocesses completed orders to prove it.
 
+## Merchant notifications
+
+Merchants are told about every status change they may see, through the transactional outbox pattern:
+
+- **Saved with the change.** When an order step is saved, a notification for each new merchant-visible event
+  is written to `ops.outbox_message` in the same transaction. If the step is rolled back or refused (for
+  example a stale copy), no notification exists; if it commits, the notification does. A unique key on
+  (order, event type, event number) stops a step from being queued twice.
+- **Merchant view only.** Notifications are built from `MerchantView`: review, rejection and freezing appear
+  as one `OnHold` step, and the merchant's events are numbered 1, 2, 3 ... on their own, so gaps in the
+  internal numbering cannot reveal hidden steps.
+- **Claiming.** A background worker claims due messages with `FOR UPDATE SKIP LOCKED` and a lease (it moves
+  `next_attempt_at` forward). Two instances never claim the same message, and a message whose sender died
+  comes back once the lease ends. A batch is sent one message at a time, so startup refuses a lease shorter
+  than `BatchSize x SendTimeoutSeconds`.
+- **Order.** Only the earliest undelivered message of each order can be claimed, so one order's notifications
+  arrive in order. A message that is given up on no longer holds the order back.
+- **Retries.** Failures (a non-2xx answer, a redirect, a timeout, a connection error) are retried with
+  exponential backoff; after `MaxAttempts` the message is marked as given up with its last error. Delivery is
+  at least once; merchants deduplicate on the event ID.
+- **Signing.** Each message is signed when it is sent (not when the batch was claimed), with the merchant's
+  own secret, using the same scheme as incoming webhooks.
+- **Outbound requests.** Webhook URLs come from the operator's configuration, not from merchants, and must
+  be HTTPS (HTTP only to localhost). The HTTP client follows no redirects, keeps no cookies and does not log
+  URLs. Before merchants can register their own URLs, outbound requests must also refuse private and
+  internal addresses (server-side request forgery).
+
 ## Persistence
 
 Storage is chosen with `Gateway:Storage:Provider`: `InMemory` (default; lost on restart, one instance only)
@@ -151,5 +178,5 @@ The schema enforces in the database what the domain enforces in code:
 
 - Off-ramp (crypto → fiat) and merchant checkout flows.
 - Any real provider adapter, real KYC, real prices.
-- Admin and reviewer UI, cumulative limits, Travel Rule data exchange, outbound merchant webhooks,
-  reconciliation against provider statements.
+- Admin and reviewer UI, Travel Rule data exchange, reconciliation against provider statements.
+- Merchants registering their own webhook URLs (needs the private-address protection above).

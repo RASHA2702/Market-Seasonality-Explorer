@@ -1,5 +1,21 @@
 # Change log
 
+## 2026-11-24 — Signed merchant webhooks (milestone item 5, part 1)
+
+- Merchants receive a signed `order.status_changed` notification for every status change they may see. Each
+  notification is written in the same transaction as the order change (transactional outbox), claimed with
+  `FOR UPDATE SKIP LOCKED` and a lease so two instances never send the same one, sent in order per order, and
+  retried with exponential backoff before being recorded as given up. Migration `005_merchant_webhooks`.
+- Each merchant client takes `WebhookUrl` (HTTPS, or HTTP to localhost) and `WebhookSecret` (at least 32
+  characters, from an environment variable or secret store). Invalid settings stop startup, and so do delivery
+  settings under which a lease could expire mid-batch.
+- `GET /v1/review/orders/{id}/webhooks` shows reviewers each notification's delivery state.
+- The merchant view now numbers events 1, 2, 3 ... on its own: gaps in the internal numbering could have
+  shown that hidden compliance steps happened.
+- The API's service registration moved into `AddGatewayApi`, and the startup-settings tests now run the
+  host's own checks on those registrations without starting a host. Starting a host that is meant to fail
+  raced with its disposal on another thread and made those tests fail rarely (`ObjectDisposedException`).
+
 ## 2026-11-24 — Merchants no longer see compliance detail
 
 - Fixes a tipping-off risk introduced with the review queue: the merchant order API showed statuses such as

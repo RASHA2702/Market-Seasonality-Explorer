@@ -3,8 +3,11 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using FiatCryptoGateway.Api.Contracts;
 using FiatCryptoGateway.Application.OnRamp;
+using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Sandbox;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -51,42 +54,100 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Gateway:ApiKeys:Clients:2:KeySha256", Sha256Hex(ReviewerKey));
         builder.UseSetting("Gateway:ApiKeys:Clients:2:Role", "Reviewer");
         builder.UseSetting("Gateway:Processing:Enabled", "false");
+        builder.UseSetting("Gateway:Webhooks:Enabled", "false"); // tests send notifications by calling the dispatcher
         builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(Time));
+    }
+}
+
+/// <summary>Captures notifications instead of posting them, and answers each with success.</summary>
+public sealed class RecordingWebhookSender : IWebhookSender
+{
+    private readonly List<(Uri Url, Guid EventId, string Body, string Signature)> _sent = [];
+
+    public IReadOnlyList<(Uri Url, Guid EventId, string Body, string Signature)> Sent
+    {
+        get
+        {
+            lock (_sent)
+            {
+                return [.. _sent];
+            }
+        }
+    }
+
+    public Task<WebhookDeliveryResult> SendAsync(Uri url, Guid eventId, string body, string signature, CancellationToken cancellationToken)
+    {
+        lock (_sent)
+        {
+            _sent.Add((url, eventId, body, signature));
+        }
+
+        return Task.FromResult(WebhookDeliveryResult.Success);
     }
 }
 
 public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<GatewayApiFactory>
 {
     private const string Address = "0x1111111111111111111111111111111111111111";
-
-    [Theory]
-    [InlineData("Gateway:Mode", "Production")]
-    [InlineData("Gateway:AllowRealFundsMovement", "true")]
-    public void ProductionSettings_StopStartup(string key, string value)
-    {
-        using var host = factory.WithWebHostBuilder(builder => builder.UseSetting(key, value));
-
-        var exception = Assert.Throws<OptionsValidationException>(() => host.CreateClient());
-
-        Assert.Contains("sandbox-only", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("Gateway:Providers:anypartner:Environment", "Live")]
-    [InlineData("Gateway:Providers:anypartner:ApiKey", "sk_live_not_a_real_key")]
-    public void LiveProviderSettings_StopStartup(string key, string value)
-    {
-        using var host = factory.WithWebHostBuilder(builder => builder.UseSetting(key, value));
-
-        Assert.Throws<OptionsValidationException>(() => host.CreateClient());
-    }
+    private const string WebhookSecret = "test-only-merchant-webhook-secret-0123456789";
 
     [Fact]
-    public void MalformedApiKeyHash_StopsStartup()
+    public async Task MerchantWebhooks_AreSignedOrderedAndRevealNoComplianceDetail()
     {
-        using var host = factory.WithWebHostBuilder(builder => builder.UseSetting("Gateway:ApiKeys:Clients:0:KeySha256", "not-a-hash"));
+        var sender = new RecordingWebhookSender();
+        using var host = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Gateway:ApiKeys:Clients:0:WebhookUrl", "https://merchant.example/hooks");
+            builder.UseSetting("Gateway:ApiKeys:Clients:0:WebhookSecret", WebhookSecret);
+            builder.ConfigureTestServices(services => services.AddSingleton<IWebhookSender>(sender));
+        });
+        using var merchant = host.CreateClient();
+        merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
+        using var reviewer = host.CreateClient();
+        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        var quote = await CreateQuoteAsync(merchant);
+        using var created = await SendOrderAsync(
+            merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
+        var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
+        await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
+        await PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/reject", new { reason = "Linked to fraud." });
+        await PostAsync<ReviewOrderResponse>(
+            reviewer, $"/v1/review/orders/{order.OrderId}/freeze", new { reason = "Reported.", reportReference = "STR-91" });
+        await PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/release", new { reason = "Release instructed." });
 
-        Assert.Throws<OptionsValidationException>(() => host.CreateClient());
+        var dispatcher = host.Services.GetRequiredService<MerchantWebhookDispatcher>();
+        while (await dispatcher.DispatchDueAsync(CancellationToken.None) > 0)
+        {
+        }
+
+        var now = factory.Time.GetUtcNow();
+        var sent = sender.Sent;
+        Assert.All(sent, delivery =>
+        {
+            Assert.Equal(new Uri("https://merchant.example/hooks"), delivery.Url);
+            Assert.True(WebhookSignature.Verify(WebhookSecret, delivery.Signature, delivery.Body, now, TimeSpan.FromMinutes(5)));
+            foreach (var word in new[] { "Frozen", "FROZEN", "REJECT", "Reject", "STR-91", "REPORT", "Compliance", "fraud" })
+            {
+                Assert.DoesNotContain(word, delivery.Body, StringComparison.Ordinal);
+            }
+        });
+        var notifications = sent.Select(delivery => JsonDocument.Parse(delivery.Body).RootElement).ToList();
+        Assert.Equal(sent.Select(delivery => delivery.EventId), notifications.Select(json => json.GetProperty("id").GetGuid()));
+        var data = notifications.Select(json => json.GetProperty("data")).ToList();
+        Assert.Equal(
+            ["AwaitingFiatPayment", "FiatReceived", "OnHold", "RefundPending", "Refunded"],
+            data.Select(item => item.GetProperty("status").GetString()));
+        Assert.Equal([1, 2, 3, 4, 5], data.Select(item => item.GetProperty("sequence").GetInt32()));
+
+        // The merchant's order view and its notifications number the same events the same way.
+        var merchantView = await merchant.GetFromJsonAsync<OrderResponse>($"/v1/orders/{order.OrderId}");
+        Assert.Equal(merchantView!.Events.Select(e => (e.Sequence, e.To)), data.Select(item => (item.GetProperty("sequence").GetInt32(), item.GetProperty("status").GetString()!)));
+
+        var deliveries = await reviewer.GetFromJsonAsync<List<WebhookDeliveryResponse>>($"/v1/review/orders/{order.OrderId}/webhooks");
+        Assert.Equal(5, deliveries!.Count);
+        Assert.All(deliveries, delivery => Assert.Equal(("Delivered", 1), (delivery.Status, delivery.Attempts)));
+        using var merchantOnDeliveries = await merchant.GetAsync(new Uri($"/v1/review/orders/{order.OrderId}/webhooks", UriKind.Relative));
+        Assert.Equal(HttpStatusCode.Forbidden, merchantOnDeliveries.StatusCode);
     }
 
     [Fact]

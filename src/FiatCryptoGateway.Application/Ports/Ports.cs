@@ -146,6 +146,65 @@ public interface IStorageInitializer
     Task InitializeAsync(IEnumerable<Asset> assets, IEnumerable<ApiClientRecord> clients, CancellationToken cancellationToken);
 }
 
+/// <summary>A notification waiting to be sent to a merchant, written in the same transaction as the order change.</summary>
+public sealed record OutboxMessage(
+    Guid MessageId,
+    string ClientId,
+    Guid OrderId,
+    int Sequence,
+    string EventType,
+    string Payload,
+    int Attempts,
+    DateTimeOffset OccurredAt);
+
+/// <summary>Delivery state of one notification. <c>Attempts</c> counts every try, including a successful one.</summary>
+public sealed record OutboxMessageStatus(
+    Guid MessageId,
+    int Sequence,
+    int Attempts,
+    DateTimeOffset? DeliveredAt,
+    DateTimeOffset? DeadAt,
+    string? LastError);
+
+/// <summary>Merchant notifications. Stores add messages when they save an order; the dispatcher sends them.</summary>
+public interface IOutbox
+{
+    /// <summary>
+    /// Claims up to <paramref name="limit"/> due messages, at most the earliest pending one per order (so
+    /// each order's events go out in sequence), and hides them from other instances for <paramref name="lease"/>.
+    /// </summary>
+    Task<IReadOnlyList<OutboxMessage>> ClaimDueAsync(DateTimeOffset now, TimeSpan lease, int limit, CancellationToken cancellationToken);
+
+    Task MarkDeliveredAsync(Guid messageId, DateTimeOffset at, CancellationToken cancellationToken);
+
+    Task ScheduleRetryAsync(Guid messageId, DateTimeOffset nextAttemptAt, string failure, CancellationToken cancellationToken);
+
+    /// <summary>Stops retrying a message; it stays recorded with the last error.</summary>
+    Task MarkDeadAsync(Guid messageId, string failure, DateTimeOffset at, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<OutboxMessageStatus>> ListForOrderAsync(Guid orderId, CancellationToken cancellationToken);
+}
+
+public sealed record MerchantWebhookTarget(Uri Url, string Secret);
+
+/// <summary>Where each merchant receives notifications, and the secret their signatures use.</summary>
+public interface IMerchantWebhookTargets
+{
+    MerchantWebhookTarget? Find(string clientId);
+}
+
+public sealed record WebhookDeliveryResult(bool Succeeded, string? Error)
+{
+    public static WebhookDeliveryResult Success { get; } = new(true, null);
+
+    public static WebhookDeliveryResult Failed(string error) => new(false, error);
+}
+
+public interface IWebhookSender
+{
+    Task<WebhookDeliveryResult> SendAsync(Uri url, Guid eventId, string body, string signature, CancellationToken cancellationToken);
+}
+
 /// <summary>Append-only journal. There is deliberately no update or delete.</summary>
 public interface ILedgerStore
 {

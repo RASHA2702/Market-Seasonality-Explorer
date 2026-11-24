@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.OnRamp;
@@ -267,6 +268,93 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
             [(ReviewActionKind.Reject, "officer", "Wallet linked to a mixer."), (ReviewActionKind.FreezeAndReport, "officer", "Reported.")],
             reloaded.ReviewActions.Select(action => (action.Kind, action.Reviewer, action.Reason)));
         Assert.DoesNotContain(await reviews.GetQueueAsync(None), item => item.Order.OrderId == order.OrderId);
+    }
+
+    [Fact]
+    public async Task MerchantNotifications_AreSavedInTheSameTransactionAsTheChange()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var services = fixture.BuildServices(time);
+        var created = await CreateOrderAsync(services);
+        var outbox = services.GetRequiredService<IOutbox>();
+        var store = services.GetRequiredService<IOrderStore>();
+        Assert.Equal([1], (await outbox.ListForOrderAsync(created.OrderId, None)).Select(status => status.Sequence));
+
+        var current = (await store.FindAsync(created.OrderId, None))!;
+        var stale = (await store.FindAsync(created.OrderId, None))!;
+        Assert.True(current.ExpireIfOverdue(current.PaymentDeadline.AddSeconds(1)));
+        await store.SaveAsync(current, [], None);
+        Assert.True(stale.ExpireIfOverdue(stale.PaymentDeadline.AddSeconds(1)));
+        await Assert.ThrowsAsync<OrderConcurrencyException>(() => store.SaveAsync(stale, [], None));
+
+        // The expiry was queued once; the refused stale save queued nothing.
+        var statuses = await outbox.ListForOrderAsync(created.OrderId, None);
+        Assert.Equal([1, 2], statuses.Select(status => status.Sequence));
+        Assert.All(statuses, status => Assert.Equal((0, (DateTimeOffset?)null), (status.Attempts, status.DeliveredAt)));
+    }
+
+    [Fact]
+    public async Task OutboxClaims_SkipMessagesBeingClaimedAndKeepEachOrderInSequence()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var instanceA = fixture.BuildServices(time);
+        await using var instanceB = fixture.BuildServices(time);
+        var first = await CreateOrderAsync(instanceA); // two notifications: created, then expired
+        var store = instanceA.GetRequiredService<IOrderStore>();
+        var loaded = (await store.FindAsync(first.OrderId, None))!;
+        Assert.True(loaded.ExpireIfOverdue(loaded.PaymentDeadline.AddSeconds(1)));
+        await store.SaveAsync(loaded, [], None);
+        var second = await CreateOrderAsync(instanceA); // one notification
+        var mine = new HashSet<Guid> { first.OrderId, second.OrderId };
+        var outboxA = instanceA.GetRequiredService<IOutbox>();
+        var outboxB = instanceB.GetRequiredService<IOutbox>();
+        var now = Start.AddYears(10); // everything in the shared database is due by then
+        var lease = TimeSpan.FromMinutes(5);
+        var firstMessageId = (await outboxA.ListForOrderAsync(first.OrderId, None))[0].MessageId;
+
+        // Another instance is in the middle of claiming the first order's opening message, so its row is locked.
+        IReadOnlyList<OutboxMessage> claimedByB;
+        await using (var connection = await instanceA.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using (var lockRow = new NpgsqlCommand("SELECT 1 FROM ops.outbox_message WHERE message_id = @id FOR UPDATE", connection, transaction))
+            {
+                lockRow.Parameters.AddWithValue("id", firstMessageId);
+                await lockRow.ExecuteScalarAsync();
+            }
+
+            claimedByB = await outboxB.ClaimDueAsync(now, lease, 10_000, None).WaitAsync(TimeSpan.FromSeconds(10));
+            await transaction.RollbackAsync();
+        }
+
+        // B neither waited for that message nor took it, nor jumped ahead to the first order's next one.
+        Assert.Equal([(second.OrderId, 1)], claimedByB.Where(m => mine.Contains(m.OrderId)).Select(m => (m.OrderId, m.Sequence)));
+
+        var claimedByA = Assert.Single(await outboxA.ClaimDueAsync(now, lease, 10_000, None), m => mine.Contains(m.OrderId));
+        Assert.Equal((firstMessageId, 1), (claimedByA.MessageId, claimedByA.Sequence));
+        using (var payload = JsonDocument.Parse(claimedByA.Payload))
+        {
+            Assert.Equal(firstMessageId, payload.RootElement.GetProperty("id").GetGuid());
+            Assert.Equal("AwaitingFiatPayment", payload.RootElement.GetProperty("data").GetProperty("status").GetString());
+        }
+
+        // Both messages are leased now: nothing more is handed out for these orders, even the next one in line.
+        Assert.DoesNotContain(await outboxB.ClaimDueAsync(now, lease, 10_000, None), m => mine.Contains(m.OrderId));
+
+        var secondMessage = claimedByB.Single(m => m.OrderId == second.OrderId);
+        await outboxA.MarkDeliveredAsync(firstMessageId, now, None);
+        await outboxB.ScheduleRetryAsync(secondMessage.MessageId, now.AddMinutes(1), "HTTP_500", None);
+        var next = (await outboxB.ClaimDueAsync(now, lease, 10_000, None)).Where(m => mine.Contains(m.OrderId));
+        Assert.Equal([(first.OrderId, 2)], next.Select(m => (m.OrderId, m.Sequence)));
+
+        var retry = Assert.Single(await outboxA.ClaimDueAsync(now.AddMinutes(1), lease, 10_000, None), m => mine.Contains(m.OrderId));
+        Assert.Equal((secondMessage.MessageId, 1), (retry.MessageId, retry.Attempts));
+
+        await outboxA.MarkDeadAsync(retry.MessageId, "HTTP_500", now.AddMinutes(1), None);
+        var gaveUp = Assert.Single(await outboxB.ListForOrderAsync(second.OrderId, None));
+        Assert.Equal((2, "HTTP_500", now.AddMinutes(1)), (gaveUp.Attempts, gaveUp.LastError, gaveUp.DeadAt));
+        var delivered = (await outboxB.ListForOrderAsync(first.OrderId, None))[0];
+        Assert.Equal((1, now), (delivered.Attempts, delivered.DeliveredAt));
     }
 
     private static async Task<PaymentOrder> CreateOrderAsync(ServiceProvider services, string address = Address)

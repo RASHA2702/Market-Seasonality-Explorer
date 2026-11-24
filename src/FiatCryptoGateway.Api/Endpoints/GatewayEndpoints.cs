@@ -58,6 +58,7 @@ public static class GatewayEndpoints
             Review(orderId, request, ReviewActionKind.FreezeAndReport, user, reviews, ct));
         review.MapPost("/orders/{orderId:guid}/release", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
             Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, ct));
+        review.MapGet("/orders/{orderId:guid}/webhooks", GetWebhookDeliveries);
         review.MapGet("/ledger/balances", GetLedgerBalances);
         return app;
     }
@@ -291,6 +292,16 @@ public static class GatewayEndpoints
             orderId, kind, user.GetClientId(), request?.Reason ?? string.Empty, request?.ReportReference, cancellationToken));
 
     /// <summary>Whole-ledger balances across all merchants. Reviewer keys only.</summary>
+    private static async Task<IEnumerable<WebhookDeliveryResponse>> GetWebhookDeliveries(
+        Guid orderId,
+        ComplianceReviewService reviews,
+        IOutbox outbox,
+        CancellationToken cancellationToken)
+    {
+        await reviews.GetOrderAsync(orderId, cancellationToken); // 404 for an unknown order
+        return (await outbox.ListForOrderAsync(orderId, cancellationToken)).Select(WebhookDeliveryResponse.From);
+    }
+
     private static async Task<LedgerBalancesResponse> GetLedgerBalances(ILedgerStore ledger, CancellationToken cancellationToken)
     {
         var balances = LedgerBalances.Compute(await ledger.ListAsync(orderId: null, cancellationToken));

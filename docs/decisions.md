@@ -36,6 +36,8 @@ consumer on-ramp.
 ### 2. Who are the customers, and what is the interface?
 **ANSWERED** (2026-11-24): merchants, through an API plus a checkout page that the gateway hosts. Their
 customers pay on that page.
+- Built: signed webhooks tell each merchant about every status change it may see, in order, with retries
+  (compliance steps appear only as "on hold"). The hosted checkout page is not built yet.
 
 ### 3. Operate as a regulated operator, or partner with licensed providers first?
 **ANSWERED**: "Yes partners." Start by partnering with licensed providers.
