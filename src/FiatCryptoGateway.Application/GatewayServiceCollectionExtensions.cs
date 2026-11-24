@@ -31,8 +31,8 @@ public static class GatewayServiceCollectionExtensions
         services.AddOptions<ComplianceOptions>()
             .Bind(configuration.GetSection(ComplianceOptions.SectionName));
 
+        // Stores and IOrderLocks are registered by the chosen storage (in memory or PostgreSQL).
         services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton<OrderLocks>();
         services.AddSingleton<ComplianceScreeningService>();
         services.AddSingleton(provider => new OnRampProviders(
             provider.GetRequiredService<Ports.IPriceFeed>(),

@@ -82,9 +82,49 @@ public interface IOrderStore
 
     Task<PaymentOrder?> FindAsync(Guid orderId, CancellationToken cancellationToken);
 
-    Task UpdateAsync(PaymentOrder order, CancellationToken cancellationToken);
+    /// <summary>
+    /// Saves the order's new state, its new history and the journal entries for that change in one
+    /// transaction, so a crash can never record one without the other. Throws
+    /// <see cref="OrderConcurrencyException"/> if the order changed since it was loaded.
+    /// </summary>
+    Task SaveAsync(PaymentOrder order, IReadOnlyList<JournalEntry> journalEntries, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<Guid>> FindByStatusAsync(IReadOnlyCollection<OrderStatus> statuses, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Serialises all work on one order. The database implementation holds the lock across API instances,
+/// so two instances can never call a provider for the same order at the same time.
+/// </summary>
+public interface IOrderLocks
+{
+    Task<IAsyncDisposable> AcquireAsync(Guid orderId, CancellationToken cancellationToken);
+}
+
+public sealed class OrderConcurrencyException : Exception
+{
+    public OrderConcurrencyException()
+        : this("The order was changed by another process.")
+    {
+    }
+
+    public OrderConcurrencyException(string message)
+        : base(message)
+    {
+    }
+
+    public OrderConcurrencyException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+public sealed record ApiClientRecord(string ClientId, string KeySha256);
+
+/// <summary>Prepares storage at startup: schema migrations and reference data (assets, API clients).</summary>
+public interface IStorageInitializer
+{
+    Task InitializeAsync(IEnumerable<Asset> assets, IEnumerable<ApiClientRecord> clients, CancellationToken cancellationToken);
 }
 
 /// <summary>Append-only journal. There is deliberately no update or delete.</summary>

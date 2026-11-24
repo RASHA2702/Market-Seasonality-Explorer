@@ -2,4 +2,8 @@
   <ItemGroup>
     <EmbeddedResource Include="Assets/iso4217.csv" LogicalName="FiatCryptoGateway.Domain.Assets.iso4217.csv" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Lets the database adapter rebuild quotes and orders without making that public. -->
+    <InternalsVisibleTo Include="FiatCryptoGateway.Persistence.Postgres" />
+  </ItemGroup>
 </Project>

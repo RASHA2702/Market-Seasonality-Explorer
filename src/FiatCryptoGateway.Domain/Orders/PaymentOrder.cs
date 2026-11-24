@@ -69,6 +69,7 @@ public sealed class PaymentOrder
     };
 
     private readonly List<OrderEvent> _events = [];
+    private readonly List<ComplianceDecision> _complianceHistory = [];
 
     private PaymentOrder(
         Guid orderId,
@@ -114,7 +115,10 @@ public sealed class PaymentOrder
 
     public FiatPaymentConfirmation? FiatPayment { get; private set; }
 
-    public ComplianceDecision? Compliance { get; private set; }
+    /// <summary>The latest compliance decision; <see cref="ComplianceHistory"/> keeps every one.</summary>
+    public ComplianceDecision? Compliance => _complianceHistory.Count == 0 ? null : _complianceHistory[^1];
+
+    public IReadOnlyList<ComplianceDecision> ComplianceHistory => _complianceHistory.AsReadOnly();
 
     public LiquidityExecution? Purchase { get; private set; }
 
@@ -125,6 +129,9 @@ public sealed class PaymentOrder
     public int Confirmations { get; private set; }
 
     public IReadOnlyList<OrderEvent> Events => _events.AsReadOnly();
+
+    /// <summary>Persistence version, used by database stores to detect concurrent updates.</summary>
+    public int Version { get; internal set; }
 
     public static bool IsAllowedTransition(OrderStatus from, OrderStatus to) =>
         AllowedTransitions.TryGetValue(from, out var allowed) && allowed.Contains(to);
@@ -162,6 +169,15 @@ public sealed class PaymentOrder
         var order = new PaymentOrder(orderId, clientId, customerId, quote, destinationAddress, now, now + paymentWindow);
         order.Append(null, OrderStatus.AwaitingFiatPayment, now, "ORDER_CREATED");
         return order;
+    }
+
+    /// <summary>Keeps the screening done before payment in the order's audit history. No state change.</summary>
+    public void RecordPrePaymentScreening(ComplianceDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        EnsureSameOrder(decision.OrderId);
+        EnsureStatus(OrderStatus.AwaitingFiatPayment);
+        _complianceHistory.Add(decision);
     }
 
     public void AttachPaymentSession(string sessionId, Uri checkoutUrl)
@@ -207,7 +223,7 @@ public sealed class PaymentOrder
         ArgumentNullException.ThrowIfNull(decision);
         EnsureSameOrder(decision.OrderId);
         EnsureStatus(OrderStatus.FiatReceived, OrderStatus.ComplianceReview);
-        Compliance = decision;
+        _complianceHistory.Add(decision);
 
         switch (decision.Outcome)
         {
@@ -328,6 +344,50 @@ public sealed class PaymentOrder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         MoveTo(OrderStatus.Failed, now, reason);
+    }
+
+    /// <summary>Rebuilds a stored order exactly as it was saved. For persistence adapters only.</summary>
+    internal static PaymentOrder Restore(
+        Guid orderId,
+        string clientId,
+        string customerId,
+        Quote quote,
+        string destinationAddress,
+        DateTimeOffset createdAt,
+        DateTimeOffset updatedAt,
+        DateTimeOffset paymentDeadline,
+        string? fiatSessionId,
+        Uri? checkoutUrl,
+        FiatPaymentConfirmation? fiatPayment,
+        LiquidityExecution? purchase,
+        CryptoTransfer? transfer,
+        FiatRefund? refund,
+        int confirmations,
+        IEnumerable<ComplianceDecision> complianceHistory,
+        IEnumerable<OrderEvent> events,
+        int version)
+    {
+        var order = new PaymentOrder(orderId, clientId, customerId, quote, destinationAddress, createdAt, paymentDeadline)
+        {
+            UpdatedAt = updatedAt,
+            FiatSessionId = fiatSessionId,
+            CheckoutUrl = checkoutUrl,
+            FiatPayment = fiatPayment,
+            Purchase = purchase,
+            Transfer = transfer,
+            Refund = refund,
+            Confirmations = confirmations,
+            Version = version,
+        };
+        order._complianceHistory.AddRange(complianceHistory);
+        order._events.AddRange(events.OrderBy(e => e.Sequence));
+        if (order._events.Count == 0)
+        {
+            throw new InvalidOperationException($"Stored order {orderId} has no history.");
+        }
+
+        order.Status = order._events[^1].To;
+        return order;
     }
 
     private void MoveTo(OrderStatus next, DateTimeOffset now, string reason)

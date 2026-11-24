@@ -31,6 +31,7 @@ public sealed class OnRampServiceTests : IDisposable
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddGatewayCore(configuration);
         services.AddSandboxProviders(configuration);
+        services.AddInMemoryStores();
         _services = services.BuildServiceProvider(validateScopes: true);
     }
 

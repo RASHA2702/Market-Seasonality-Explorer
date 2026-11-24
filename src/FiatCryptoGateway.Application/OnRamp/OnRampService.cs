@@ -38,7 +38,7 @@ public sealed partial class OnRampService(
     OnRampProviders providers,
     OnRampStores stores,
     ComplianceScreeningService compliance,
-    OrderLocks locks,
+    IOrderLocks locks,
     IOptions<PricingOptions> pricing,
     TimeProvider time,
     ILogger<OnRampService> logger)
@@ -127,6 +127,7 @@ public sealed partial class OnRampService(
 
         var policy = pricing.Value.ToPolicy(catalog);
         var order = PaymentOrder.Create(orderId, clientId, command.CustomerId, quote, command.DestinationAddress, now, policy.PaymentWindow);
+        order.RecordPrePaymentScreening(precheck);
         var session = await providers.Fiat.CreateSessionAsync(order, cancellationToken);
         order.AttachPaymentSession(session.SessionId, session.CheckoutUrl);
         await stores.Orders.AddAsync(order, cancellationToken);
@@ -148,7 +149,7 @@ public sealed partial class OnRampService(
     public async Task<PaymentOrder?> RecordFiatPaymentAsync(FiatPaymentConfirmation payment, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(payment);
-        using (await locks.AcquireAsync(payment.OrderId, cancellationToken))
+        await using (await locks.AcquireAsync(payment.OrderId, cancellationToken))
         {
             var order = await stores.Orders.FindAsync(payment.OrderId, cancellationToken);
             if (order is null)
@@ -165,8 +166,7 @@ public sealed partial class OnRampService(
 
             var now = time.GetUtcNow();
             order.RecordFiatPayment(payment, now);
-            await stores.Ledger.AppendAsync(OnRampPostings.FiatReceived(order, payment, now), cancellationToken);
-            await stores.Orders.UpdateAsync(order, cancellationToken);
+            await stores.Orders.SaveAsync(order, [OnRampPostings.FiatReceived(order, payment, now)], cancellationToken);
         }
 
         return await ProcessAsync(payment.OrderId, cancellationToken);
@@ -175,14 +175,14 @@ public sealed partial class OnRampService(
     /// <summary>Advances the order as far as it can go without waiting for an outside event.</summary>
     public async Task<PaymentOrder> ProcessAsync(Guid orderId, CancellationToken cancellationToken)
     {
-        using (await locks.AcquireAsync(orderId, cancellationToken))
+        await using (await locks.AcquireAsync(orderId, cancellationToken))
         {
             var order = await stores.Orders.FindAsync(orderId, cancellationToken)
                 ?? throw new ResourceNotFoundException("ORDER_NOT_FOUND", "The order does not exist.");
 
-            while (await TryAdvanceAsync(order, cancellationToken))
+            while (await TryAdvanceAsync(order, cancellationToken) is { } journalEntries)
             {
-                await stores.Orders.UpdateAsync(order, cancellationToken);
+                await stores.Orders.SaveAsync(order, journalEntries, cancellationToken);
             }
 
             return order;
@@ -196,12 +196,12 @@ public sealed partial class OnRampService(
         int confirmations,
         CancellationToken cancellationToken)
     {
-        using (await locks.AcquireAsync(orderId, cancellationToken))
+        await using (await locks.AcquireAsync(orderId, cancellationToken))
         {
             var order = await GetOrderAsync(clientId, orderId, cancellationToken);
             var required = providers.Custody.RequiredConfirmations(order.Quote.DestinationAmount.Asset);
             order.RecordConfirmations(transactionHash, confirmations, required, time.GetUtcNow());
-            await stores.Orders.UpdateAsync(order, cancellationToken);
+            await stores.Orders.SaveAsync(order, [], cancellationToken);
             return order;
         }
     }
@@ -215,7 +215,7 @@ public sealed partial class OnRampService(
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reviewer);
-        using (await locks.AcquireAsync(orderId, cancellationToken))
+        await using (await locks.AcquireAsync(orderId, cancellationToken))
         {
             var order = await GetOrderAsync(clientId, orderId, cancellationToken);
             if (order.Status != OrderStatus.ComplianceReview)
@@ -231,7 +231,7 @@ public sealed partial class OnRampService(
                 $"reviewer:{reviewer}",
                 now);
             order.ApplyCompliance(decision, now);
-            await stores.Orders.UpdateAsync(order, cancellationToken);
+            await stores.Orders.SaveAsync(order, [], cancellationToken);
         }
 
         return await ProcessAsync(orderId, cancellationToken);
@@ -242,12 +242,12 @@ public sealed partial class OnRampService(
         var expired = 0;
         foreach (var orderId in await stores.Orders.FindByStatusAsync([OrderStatus.AwaitingFiatPayment], cancellationToken))
         {
-            using (await locks.AcquireAsync(orderId, cancellationToken))
+            await using (await locks.AcquireAsync(orderId, cancellationToken))
             {
                 var order = await stores.Orders.FindAsync(orderId, cancellationToken);
                 if (order is not null && order.ExpireIfOverdue(time.GetUtcNow()))
                 {
-                    await stores.Orders.UpdateAsync(order, cancellationToken);
+                    await stores.Orders.SaveAsync(order, [], cancellationToken);
                     expired++;
                 }
             }
@@ -278,7 +278,11 @@ public sealed partial class OnRampService(
         return orderIds.Count;
     }
 
-    private async Task<bool> TryAdvanceAsync(PaymentOrder order, CancellationToken cancellationToken)
+    /// <summary>
+    /// Performs the next step, if one can run without an outside event, and returns the journal entries
+    /// it produced (possibly none). Returns null when the order must wait.
+    /// </summary>
+    private async Task<IReadOnlyList<JournalEntry>?> TryAdvanceAsync(PaymentOrder order, CancellationToken cancellationToken)
     {
         switch (order.Status)
         {
@@ -293,7 +297,7 @@ public sealed partial class OnRampService(
                     order.Quote.PivotAmount,
                     cancellationToken);
                 order.ApplyCompliance(decision, time.GetUtcNow());
-                return true;
+                return [];
             }
 
             case OrderStatus.ReadyToSettle:
@@ -301,8 +305,7 @@ public sealed partial class OnRampService(
                 var execution = await providers.Liquidity.BuyAsync(order, cancellationToken);
                 var now = time.GetUtcNow();
                 order.RecordPurchase(execution, now);
-                await stores.Ledger.AppendAsync(OnRampPostings.CryptoPurchased(order, execution, providers.Custody.Name, now), cancellationToken);
-                return true;
+                return [OnRampPostings.CryptoPurchased(order, execution, providers.Custody.Name, now)];
             }
 
             case OrderStatus.CryptoPurchased:
@@ -310,8 +313,7 @@ public sealed partial class OnRampService(
                 var transfer = await providers.Custody.SendAsync(order, cancellationToken);
                 var now = time.GetUtcNow();
                 order.RecordTransfer(transfer, now);
-                await stores.Ledger.AppendAsync(OnRampPostings.CryptoSent(order, transfer, providers.Custody.Name, now), cancellationToken);
-                return true;
+                return [OnRampPostings.CryptoSent(order, transfer, providers.Custody.Name, now)];
             }
 
             case OrderStatus.RefundPending:
@@ -320,12 +322,11 @@ public sealed partial class OnRampService(
                 var refund = await providers.Fiat.RefundAsync(order, paid.Amount, cancellationToken);
                 var now = time.GetUtcNow();
                 order.RecordRefund(refund, now);
-                await stores.Ledger.AppendAsync(OnRampPostings.Refunded(order, refund, now), cancellationToken);
-                return true;
+                return [OnRampPostings.Refunded(order, refund, now)];
             }
 
             default:
-                return false;
+                return null;
         }
     }
 

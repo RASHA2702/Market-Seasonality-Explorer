@@ -113,19 +113,31 @@ not the customer.
 
 ## Persistence
 
-The sandbox API keeps data in memory (lost on restart). `db/migrations/001_gateway_foundation.sql`
-defines the durable schema, enforcing in the database what the domain enforces in code:
+Storage is chosen with `Gateway:Storage:Provider`: `InMemory` (default; lost on restart, one instance only)
+or `Postgres` (connection string from `ConnectionStrings:Gateway`).
+
+- **One transaction per step.** Each change to an order is saved with its new history rows and the
+  journal entries it caused, so a crash can never leave a ledger entry without the state change (or the
+  reverse). Retrying a step is safe because providers are idempotent per order.
+- **Several API instances.** A per-order PostgreSQL advisory lock is held for the whole step, including the
+  provider call, so two instances never call a provider for the same order at once. The save itself locks
+  the row (`SELECT … FOR UPDATE`) and checks the version the order was loaded at; a stale copy is refused.
+  A test runs two instances against one database and checks that crypto is bought and sent only once.
+- **Migrations.** The SQL files in `db/migrations` are embedded in the persistence project. The API applies
+  pending ones at startup (instances take turns), or `db/migrate.sh` applies them; both record versions in
+  `ops.schema_migration`.
+
+The schema enforces in the database what the domain enforces in code:
 
 - journal entries balance per asset (checked at commit) and have at least two lines;
 - ledger and order history are append-only (no update, delete or truncate);
 - order events follow allowed transitions and continue from the previous event;
 - a quote backs one order, a provider payment settles one order, quote figures add up.
 
-Connecting the application to this schema is the first item of the next milestone.
 
 ## Deliberately not built yet
 
 - Off-ramp (crypto → fiat) and merchant checkout flows.
 - Any real provider adapter, real KYC, real prices.
-- PostgreSQL-backed stores, admin and reviewer UI, cumulative limits, Travel Rule data exchange,
-  outbound merchant webhooks, reconciliation against provider statements, multi-instance locking.
+- Admin and reviewer UI, cumulative limits, Travel Rule data exchange, outbound merchant webhooks,
+  reconciliation against provider statements.

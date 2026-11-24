@@ -32,9 +32,10 @@ public sealed class InMemoryQuoteStore : IQuoteStore
         Task.FromResult(_consumedBy.TryAdd(quoteId, orderId));
 }
 
-public sealed class InMemoryOrderStore : IOrderStore
+public sealed class InMemoryOrderStore(InMemoryLedgerStore ledger) : IOrderStore
 {
     private readonly ConcurrentDictionary<Guid, PaymentOrder> _orders = new();
+    private readonly Lock _saveGate = new();
 
     public Task AddAsync(PaymentOrder order, CancellationToken cancellationToken)
     {
@@ -50,8 +51,23 @@ public sealed class InMemoryOrderStore : IOrderStore
     public Task<PaymentOrder?> FindAsync(Guid orderId, CancellationToken cancellationToken) =>
         Task.FromResult(_orders.TryGetValue(orderId, out var order) ? order : null);
 
-    // Orders are held by reference, so there is nothing to write back in memory.
-    public Task UpdateAsync(PaymentOrder order, CancellationToken cancellationToken) => Task.CompletedTask;
+    // Orders are held by reference, so only the journal entries need recording, together with the change.
+    public Task SaveAsync(PaymentOrder order, IReadOnlyList<JournalEntry> journalEntries, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(journalEntries);
+        lock (_saveGate)
+        {
+            if (!_orders.ContainsKey(order.OrderId))
+            {
+                throw new InvalidOperationException($"Order {order.OrderId} was never added.");
+            }
+
+            ledger.AppendAll(journalEntries);
+        }
+
+        return Task.CompletedTask;
+    }
 
     public Task<IReadOnlyList<Guid>> FindByStatusAsync(IReadOnlyCollection<OrderStatus> statuses, CancellationToken cancellationToken)
     {
@@ -73,12 +89,16 @@ public sealed class InMemoryLedgerStore : ILedgerStore
     public Task AppendAsync(JournalEntry entry, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        AppendAll([entry]);
+        return Task.CompletedTask;
+    }
+
+    internal void AppendAll(IEnumerable<JournalEntry> entries)
+    {
         lock (_gate)
         {
-            _entries.Add(entry);
+            _entries.AddRange(entries);
         }
-
-        return Task.CompletedTask;
     }
 
     public Task<IReadOnlyList<JournalEntry>> ListAsync(Guid? orderId, CancellationToken cancellationToken)
@@ -133,4 +153,11 @@ public sealed class InMemoryWebhookInbox : IWebhookInbox
         _events.TryRemove((provider, eventId), out _);
         return Task.CompletedTask;
     }
+}
+
+/// <summary>Nothing to prepare for process-memory storage.</summary>
+public sealed class InMemoryStorageInitializer : IStorageInitializer
+{
+    public Task InitializeAsync(IEnumerable<Domain.Assets.Asset> assets, IEnumerable<ApiClientRecord> clients, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }

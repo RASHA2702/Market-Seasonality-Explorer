@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-11-24 — PostgreSQL storage (milestone item 1)
+
+- New `FiatCryptoGateway.Persistence.Postgres` project: PostgreSQL stores for quotes, orders, order history,
+  compliance decisions, the ledger, idempotency keys and the webhook inbox.
+- Each order step is now saved in one transaction with the journal entries it caused. Previously the ledger
+  entry and the state change were two separate writes, so a crash between them could have recorded an
+  entry twice on retry.
+- Safe with several API instances: a per-order advisory lock across the provider call, plus a row lock and
+  version check on save. A test races two instances on one order.
+- Migration `002_persistence.sql`; the API can apply migrations at startup. Every compliance decision,
+  including the screening before payment, is kept in order and cannot be changed.
+- Storage is selected with `Gateway:Storage:Provider` (`InMemory` by default, or `Postgres`).
+
 ## 2026-11-24 — Sandbox foundation
 
 - .NET 10 solution: Domain, Application, Sandbox and API projects, with unit and API tests.

@@ -9,6 +9,7 @@ SET CONSTRAINTS ALL IMMEDIATE;
 -- Fixtures -------------------------------------------------------------------------------------
 INSERT INTO gateway.asset (asset_key, kind, code, network, scale, network_fee_asset_key, name) VALUES
     ('INR', 'FIAT', 'INR', NULL, 2, NULL, 'Indian Rupee'),
+    ('USD', 'FIAT', 'USD', NULL, 2, NULL, 'US Dollar'),
     ('ETH@ethereum', 'CRYPTO', 'ETH', 'ethereum', 18, 'ETH@ethereum', 'Ether'),
     ('USDC@ethereum', 'CRYPTO', 'USDC', 'ethereum', 6, 'ETH@ethereum', 'USD Coin on Ethereum');
 
@@ -18,13 +19,13 @@ VALUES ('client-a', 'Test client', repeat('a', 64));
 INSERT INTO gateway.quote (
     quote_id, client_id, source_asset_key, source_amount, service_fee, net_source_amount,
     destination_asset_key, gross_destination_amount, network_fee, destination_amount,
-    market_rate, customer_rate, pivot_amount, price_path, pricing_policy_version, created_at, expires_at)
+    market_rate, customer_rate, pivot_asset_key, pivot_amount, price_path, pricing_policy_version, created_at, expires_at)
 VALUES
     ('40000000-0000-0000-0000-000000000001', 'client-a', 'INR', 10000, 150, 9850,
-     'USDC@ethereum', 115.64885, 1.5, 114.14885, 0.0118, 0.011741, 118, '[]', 'test',
+     'USDC@ethereum', 115.64885, 1.5, 114.14885, 0.0118, 0.011741, 'USD', 118, '[]', 'test',
      '2026-11-24T12:00:00Z', '2026-11-24T12:01:00Z'),
     ('40000000-0000-0000-0000-000000000002', 'client-a', 'INR', 10000, 150, 9850,
-     'USDC@ethereum', 115.64885, 1.5, 114.14885, 0.0118, 0.011741, 118, '[]', 'test',
+     'USDC@ethereum', 115.64885, 1.5, 114.14885, 0.0118, 0.011741, 'USD', 118, '[]', 'test',
      '2026-11-24T12:00:00Z', '2026-11-24T12:01:00Z');
 
 INSERT INTO gateway.payment_order (
@@ -167,9 +168,9 @@ BEGIN
         INSERT INTO gateway.quote (
             quote_id, client_id, source_asset_key, source_amount, service_fee, net_source_amount,
             destination_asset_key, gross_destination_amount, network_fee, destination_amount,
-            market_rate, customer_rate, pivot_amount, price_path, pricing_policy_version, created_at, expires_at)
+            market_rate, customer_rate, pivot_asset_key, pivot_amount, price_path, pricing_policy_version, created_at, expires_at)
         VALUES ('40000000-0000-0000-0000-000000000003', 'client-a', 'INR', 10000, 150, 9900,
-                'USDC@ethereum', 115.64885, 1.5, 114.14885, 0.0118, 0.011741, 118, '[]', 'test', now(), now() + INTERVAL '1 minute');
+                'USDC@ethereum', 115.64885, 1.5, 114.14885, 0.0118, 0.011741, 'USD', 118, '[]', 'test', now(), now() + INTERVAL '1 minute');
         RAISE EXCEPTION 'FAILED: a quote whose figures do not add up was accepted';
     EXCEPTION WHEN check_violation THEN
         RAISE NOTICE 'ok: quote figures must add up';

@@ -19,8 +19,8 @@ and API are real and tested, but every bank, exchange, custodian and KYC provide
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level and limits, blocked countries, sanctions match, wallet screening, manual review. Fails closed: a screening outage means human review, never approval. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
-| Database | PostgreSQL schema that enforces the same rules (balanced ledger, legal state transitions, one order per quote), with tests. The sandbox API itself still stores data in memory. |
-| Tests and CI | 126 .NET tests, 15 database constraint tests, and a secret scan, run on every push. |
+| Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
+| Tests and CI | 132 .NET tests (6 of them against a real PostgreSQL in Docker), 15 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -71,6 +71,24 @@ Prerequisites: .NET SDK 10.
    curl -s http://127.0.0.1:5080/v1/orders/<orderId>/ledger -H "Authorization: Bearer $key"
    ```
 
+### Keep data in PostgreSQL
+
+By default everything is lost when the API stops. To keep it, start the local database and point the API
+at it (same shell as step 1):
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
+
+```bash
+export Gateway__Storage__Provider=Postgres
+export ConnectionStrings__Gateway="Host=127.0.0.1;Port=5433;Username=gateway_app;Password=<POSTGRES_PASSWORD from .env>;Database=gateway"
+```
+
+The API applies database migrations at startup; set `Gateway__Storage__ApplyMigrationsOnStartup=false` to
+apply them yourself with `db/migrate.sh` instead. Several API instances can share one database.
+
 Sandbox test customers: `cust_verified`, `cust_basic` (1,000 USD limit), `cust_unverified`,
 `cust_sanctioned`, `cust_blocked_country`. Special wallet addresses that trigger compliance outcomes
 are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
@@ -97,7 +115,9 @@ Errors are `{"error":{"code":"...","message":"..."}}` with stable codes such as 
 dotnet test FiatCryptoGateway.sln
 ```
 
-Database (needs `psql` and a PostgreSQL server, for example `docker compose up -d` after copying
+The PostgreSQL tests start their own database in Docker, so Docker must be running.
+
+Database scripts (need `psql` and a PostgreSQL server, for example `docker compose up -d` after copying
 `.env.example` to `.env`):
 
 ```bash
@@ -115,6 +135,7 @@ PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app PGDATABASE=gateway PGPASSWORD=yo
 | `src/FiatCryptoGateway.Domain` | Money, assets, quotes, the order state machine, ledger and compliance rules. No I/O. |
 | `src/FiatCryptoGateway.Application` | Order orchestration, provider interfaces, configuration, the sandbox-only safety gate. |
 | `src/FiatCryptoGateway.Sandbox` | Simulated providers and in-memory stores. Real adapters will sit beside it. |
+| `src/FiatCryptoGateway.Persistence.Postgres` | PostgreSQL stores, cross-instance order locks, and the migration runner. |
 | `src/FiatCryptoGateway.Api` | HTTP API, API-key authentication, background order processing. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md) and [decisions](docs/decisions.md). |

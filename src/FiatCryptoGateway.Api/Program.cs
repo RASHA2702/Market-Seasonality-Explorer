@@ -10,6 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Validates Gateway:Mode at startup: anything other than Sandbox stops the process.
 builder.Services.AddGatewayCore(builder.Configuration);
 builder.Services.AddSandboxProviders(builder.Configuration);
+builder.Services.AddGatewayStorage(builder.Configuration);
 builder.Services.AddApiKeyAuthentication(builder.Configuration);
 builder.Services.AddHealthChecks();
 builder.Services.ConfigureHttpJsonOptions(options =>
