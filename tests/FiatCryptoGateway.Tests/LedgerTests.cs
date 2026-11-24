@@ -124,6 +124,51 @@ public sealed class LedgerTests
         Assert.Equal(OrderStatus.Refunded, order.Status);
     }
 
+    [Fact]
+    public void EachPosting_RecordsTheProviderMovementItAccountsFor()
+    {
+        var order = Fixtures.Order();
+        var payment = Fixtures.Payment(order);
+        var execution = Fixtures.Execution(order);
+        var transfer = Fixtures.Transfer(order);
+        var refund = new FiatRefund("test-psp", "rfd_1", order.OrderId, payment.Amount, At.AddMinutes(9));
+
+        var received = OnRampPostings.FiatReceived(order, payment, At);
+        var purchased = OnRampPostings.CryptoPurchased(order, execution, "custody", At);
+        var sent = OnRampPostings.CryptoSent(order, transfer, "custody", At);
+        var refunded = OnRampPostings.Refunded(order, refund, At);
+
+        Assert.Equal(new ExternalReference("test-psp", "pay_1", payment.Amount, payment.CapturedAt), received.External);
+        Assert.Equal(new ExternalReference("test-lp", "lpx_1", execution.CryptoReceived, execution.ExecutedAt), purchased.External);
+        Assert.Equal(new ExternalReference("test-custody", "tx_1", transfer.Amount, transfer.BroadcastAt), sent.External);
+        Assert.Equal(new ExternalReference("test-psp", "rfd_1", refund.Amount, refund.RefundedAt), refunded.External);
+
+        // The provider amount is what moved through the provider's account in the books.
+        Assert.Equal(payment.Amount, Line(received, "assets:psp_clearing:test-psp", EntrySide.Debit));
+        Assert.Equal(execution.CryptoReceived, Line(purchased, "assets:hot_wallet:custody", EntrySide.Debit));
+        Assert.Equal(transfer.Amount, Line(sent, "assets:hot_wallet:custody", EntrySide.Credit, Fixtures.Usdc.Id));
+        Assert.Equal(refund.Amount, Line(refunded, "assets:psp_clearing:test-psp", EntrySide.Credit));
+    }
+
+    [Theory]
+    [InlineData("", "pay_1", 100)]
+    [InlineData("test-psp", " ", 100)]
+    [InlineData("test-psp", "pay_1", 0)]
+    public void IncompleteProviderReference_IsRefused(string provider, string id, int amount)
+    {
+        var builder = new JournalEntryBuilder()
+            .Debit(LedgerAccount.PspClearing("test-psp", Fixtures.Inr.Id), new Money(100m, Fixtures.Inr))
+            .Credit(LedgerAccount.CustomerOrders(Fixtures.Inr.Id), new Money(100m, Fixtures.Inr));
+
+        var exception = Assert.Throws<GatewayRuleException>(() =>
+            builder.Build("FIAT_RECEIVED", null, At, new ExternalReference(provider, id, new Money(amount, Fixtures.Inr), At)));
+
+        Assert.Equal("INVALID_EXTERNAL_REFERENCE", exception.Code);
+    }
+
+    private static Money Line(JournalEntry entry, string account, EntrySide side, AssetId? asset = null) =>
+        entry.Lines.Single(line => line.Account.Code == account && line.Side == side && (asset is null || line.Account.Asset == asset)).Amount;
+
     private static decimal Balance(IReadOnlyList<AccountBalance> balances, string account, AssetId asset) =>
         balances.Single(balance => balance.Account == account && balance.Asset == asset).DebitMinusCredit;
 }

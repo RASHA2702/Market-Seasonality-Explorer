@@ -1,5 +1,14 @@
 # Change log
 
+## 2026-11-24 — Provider references on ledger entries (milestone item 5, part 2)
+
+- Each journal entry that records a provider's money movement now carries the provider's own record of it:
+  provider, the provider's ID (payment, refund, execution or transaction), the amount and the provider's time.
+  This is what daily reconciliation matches against provider reports.
+- The database refuses to book the same provider movement twice for the same kind of entry, so a payment can
+  never be credited twice even if a bug tried (migration `006_ledger_references`). Entries written before this
+  migration keep no reference.
+
 ## 2026-11-24 — Signed merchant webhooks (milestone item 5, part 1)
 
 - Merchants receive a signed `order.status_changed` notification for every status change they may see. Each

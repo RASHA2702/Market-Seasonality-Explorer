@@ -66,6 +66,12 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
 
         var entries = await second.GetRequiredService<ILedgerStore>().ListAsync(order.OrderId, None);
         Assert.Equal(["FIAT_RECEIVED", "CRYPTO_PURCHASED", "CRYPTO_SENT"], entries.Select(entry => entry.Kind));
+        Assert.Equal(
+            new ExternalReference(SandboxFiatProvider.ProviderName, reloaded.FiatPayment.ProviderPaymentId, reloaded.FiatPayment.Amount, reloaded.FiatPayment.CapturedAt),
+            entries[0].External);
+        Assert.Equal(
+            new ExternalReference(reloaded.Transfer.Provider, reloaded.Transfer.TransactionHash, reloaded.Transfer.Amount, reloaded.Transfer.BroadcastAt),
+            entries[2].External);
         var balances = LedgerBalances.Compute(entries);
         Assert.All(balances.GroupBy(balance => balance.Asset), asset => Assert.Equal(0m, asset.Sum(balance => balance.DebitMinusCredit)));
         Assert.All(
@@ -114,6 +120,21 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         Assert.True(second.ExpireIfOverdue(second.PaymentDeadline.AddSeconds(1)));
 
         await Assert.ThrowsAsync<OrderConcurrencyException>(() => store.SaveAsync(second, [], None));
+    }
+
+    [Fact]
+    public async Task ProviderPayment_CannotBeBookedTwice()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var services = fixture.BuildServices(time);
+        var order = await CreatePaidButUnprocessedOrderAsync(services, time);
+        var payment = order.FiatPayment!;
+
+        var duplicate = OnRampPostings.FiatReceived(order, payment, time.GetUtcNow());
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => services.GetRequiredService<ILedgerStore>().AppendAsync(duplicate, None));
+
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, exception.SqlState);
+        Assert.Single(await services.GetRequiredService<ILedgerStore>().ListAsync(order.OrderId, None));
     }
 
     [Fact]

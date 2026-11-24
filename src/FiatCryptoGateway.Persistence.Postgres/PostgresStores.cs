@@ -432,7 +432,8 @@ public sealed class PostgresLedgerStore(NpgsqlDataSource dataSource, AssetCatalo
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand(
             """
-            SELECT e.entry_id, e.kind, e.order_id, e.posted_at, l.account_code, l.asset_key, l.side, trim_scale(l.amount)
+            SELECT e.entry_id, e.kind, e.order_id, e.posted_at, l.account_code, l.asset_key, l.side, trim_scale(l.amount),
+                   e.external_provider, e.external_id, e.external_asset_key, trim_scale(e.external_amount), e.external_occurred_at
               FROM ledger.journal_entry e
               JOIN ledger.journal_line l USING (entry_id)
              WHERE @order_id::uuid IS NULL OR e.order_id = @order_id::uuid
@@ -440,21 +441,33 @@ public sealed class PostgresLedgerStore(NpgsqlDataSource dataSource, AssetCatalo
             """,
             connection);
         command.With("order_id", orderId);
+        return await ReadEntriesAsync(command, cancellationToken);
+    }
 
+    /// <summary>Reads rows of entry columns 0-3, line columns 4-7 and provider-reference columns 8-12, ordered by entry.</summary>
+    private async Task<IReadOnlyList<JournalEntry>> ReadEntriesAsync(NpgsqlCommand command, CancellationToken cancellationToken)
+    {
         var entries = new List<JournalEntry>();
         var lines = new List<JournalLine>();
-        (Guid Id, string Kind, Guid? OrderId, DateTimeOffset PostedAt)? current = null;
+        (Guid Id, string Kind, Guid? OrderId, DateTimeOffset PostedAt, ExternalReference? External)? current = null;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var entryId = reader.GetGuid(0);
             if (current is { } open && open.Id != entryId)
             {
-                entries.Add(new JournalEntry(open.Id, open.Kind, open.OrderId, open.PostedAt, lines));
+                entries.Add(new JournalEntry(open.Id, open.Kind, open.OrderId, open.PostedAt, lines, open.External));
                 lines = [];
             }
 
-            current = (entryId, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetGuid(2), reader.GetFieldValue<DateTimeOffset>(3));
+            var external = reader.IsDBNull(8)
+                ? null
+                : new ExternalReference(
+                    reader.GetString(8),
+                    reader.GetString(9),
+                    _mapper.Money(reader.GetDecimal(11), reader.GetString(10)),
+                    reader.GetFieldValue<DateTimeOffset>(12));
+            current = (entryId, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetGuid(2), reader.GetFieldValue<DateTimeOffset>(3), external);
             var assetKey = reader.GetString(5);
             lines.Add(new JournalLine(
                 new LedgerAccount(reader.GetString(4), AssetId.Parse(assetKey)),
@@ -464,7 +477,7 @@ public sealed class PostgresLedgerStore(NpgsqlDataSource dataSource, AssetCatalo
 
         if (current is { } last)
         {
-            entries.Add(new JournalEntry(last.Id, last.Kind, last.OrderId, last.PostedAt, lines));
+            entries.Add(new JournalEntry(last.Id, last.Kind, last.OrderId, last.PostedAt, lines, last.External));
         }
 
         return entries.AsReadOnly();

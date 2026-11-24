@@ -169,6 +169,8 @@ or `Postgres` (connection string from `ConnectionStrings:Gateway`).
 The schema enforces in the database what the domain enforces in code:
 
 - journal entries balance per asset (checked at commit) and have at least two lines;
+- an entry that records a provider movement names it completely (provider, the provider's ID, amount, time),
+  and the same movement can be booked only once per kind of entry;
 - ledger and order history are append-only (no update, delete or truncate);
 - order events follow allowed transitions and continue from the previous event;
 - a quote backs one order, a provider payment settles one order, quote figures add up.

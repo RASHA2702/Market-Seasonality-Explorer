@@ -272,11 +272,26 @@ internal static class LedgerRows
         foreach (var entry in entries)
         {
             await using (var command = new NpgsqlCommand(
-                "INSERT INTO ledger.journal_entry (entry_id, kind, order_id, posted_at) VALUES (@id, @kind, @order_id, @posted_at)",
+                """
+                INSERT INTO ledger.journal_entry (
+                    entry_id, kind, order_id, posted_at,
+                    external_provider, external_id, external_asset_key, external_amount, external_occurred_at)
+                VALUES (@id, @kind, @order_id, @posted_at, @provider, @external_id, @external_asset, @external_amount, @external_at)
+                """,
                 connection,
                 transaction))
             {
-                command.With("id", entry.EntryId).With("kind", entry.Kind).With("order_id", entry.OrderId).With("posted_at", entry.PostedAt.Utc());
+                var external = entry.External;
+                command
+                    .With("id", entry.EntryId)
+                    .With("kind", entry.Kind)
+                    .With("order_id", entry.OrderId)
+                    .With("posted_at", entry.PostedAt.Utc())
+                    .With("provider", external?.Provider)
+                    .With("external_id", external?.Id)
+                    .With("external_asset", external?.Amount.Asset.Id.ToString())
+                    .With("external_amount", external?.Amount.Amount)
+                    .With("external_at", external?.OccurredAt.Utc());
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
 

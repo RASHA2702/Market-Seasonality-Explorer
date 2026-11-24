@@ -22,7 +22,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
 | Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 203 .NET tests (12 of them against a real PostgreSQL in Docker), 25 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 208 .NET tests (13 of them against a real PostgreSQL in Docker), 28 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
