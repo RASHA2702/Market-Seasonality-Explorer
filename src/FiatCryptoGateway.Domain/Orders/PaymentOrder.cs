@@ -15,6 +15,7 @@ public enum OrderStatus
     Completed,
     Expired,
     ComplianceRejected,
+    Frozen,
     RefundPending,
     Refunded,
     Failed,
@@ -48,6 +49,23 @@ public sealed record CryptoTransfer(
 
 public sealed record FiatRefund(string Provider, string RefundId, Guid OrderId, Money Amount, DateTimeOffset RefundedAt);
 
+public enum ReviewActionKind
+{
+    Approve,
+    Reject,
+    FreezeAndReport,
+    ReleaseForRefund,
+}
+
+/// <summary>One reviewer action, kept forever: who did what, when, and why.</summary>
+public sealed record ReviewAction(
+    int Sequence,
+    ReviewActionKind Kind,
+    string Reviewer,
+    string Reason,
+    string? ReportReference,
+    DateTimeOffset OccurredAt);
+
 /// <summary>
 /// An on-ramp order: the customer pays fiat and receives crypto. Every change goes through an explicit,
 /// recorded transition; anything not in <see cref="AllowedTransitions"/> is refused.
@@ -64,12 +82,15 @@ public sealed class PaymentOrder
         [OrderStatus.CryptoPurchased] = [OrderStatus.CryptoSent, OrderStatus.Failed],
         [OrderStatus.CryptoSent] = [OrderStatus.Completed, OrderStatus.Failed],
         [OrderStatus.Expired] = [OrderStatus.RefundPending],
-        [OrderStatus.ComplianceRejected] = [OrderStatus.RefundPending],
+        // Rejected money is frozen and reported first; it can only be released by a later, reasoned decision.
+        [OrderStatus.ComplianceRejected] = [OrderStatus.Frozen],
+        [OrderStatus.Frozen] = [OrderStatus.RefundPending],
         [OrderStatus.RefundPending] = [OrderStatus.Refunded],
     };
 
     private readonly List<OrderEvent> _events = [];
     private readonly List<ComplianceDecision> _complianceHistory = [];
+    private readonly List<ReviewAction> _reviewActions = [];
 
     private PaymentOrder(
         Guid orderId,
@@ -119,6 +140,12 @@ public sealed class PaymentOrder
     public ComplianceDecision? Compliance => _complianceHistory.Count == 0 ? null : _complianceHistory[^1];
 
     public IReadOnlyList<ComplianceDecision> ComplianceHistory => _complianceHistory.AsReadOnly();
+
+    public IReadOnlyList<ReviewAction> ReviewActions => _reviewActions.AsReadOnly();
+
+    /// <summary>The reference of the report filed when the order's money was frozen, if any.</summary>
+    public string? ReportReference =>
+        _reviewActions.LastOrDefault(action => action.Kind == ReviewActionKind.FreezeAndReport)?.ReportReference;
 
     public LiquidityExecution? Purchase { get; private set; }
 
@@ -315,14 +342,56 @@ public sealed class PaymentOrder
     }
 
     /// <summary>
-    /// A compliance-rejected payment is held until a person decides to refund it (some rejections must
-    /// be reported to authorities instead). This records that decision.
+    /// A person's decision on a held order. Every action needs a reason and is kept in
+    /// <see cref="ReviewActions"/>:
+    /// approve or reject an order in review; freeze and report a rejected order's money (with the
+    /// report's reference); or release frozen money for refund once that is allowed.
     /// </summary>
-    public void ApproveRefundAfterRejection(string approvedBy, DateTimeOffset now)
+    public void Review(ReviewActionKind kind, string reviewer, string reason, string? reportReference, DateTimeOffset now)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(approvedBy);
-        EnsureStatus(OrderStatus.ComplianceRejected);
-        MoveTo(OrderStatus.RefundPending, now, $"REFUND_APPROVED_BY:{approvedBy}");
+        ArgumentException.ThrowIfNullOrWhiteSpace(reviewer);
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 2000)
+        {
+            throw new GatewayRuleException("REASON_REQUIRED", "Every review action needs a reason (at most 2,000 characters).");
+        }
+
+        switch (kind)
+        {
+            case ReviewActionKind.Approve or ReviewActionKind.Reject:
+                EnsureStatus(OrderStatus.ComplianceReview);
+                ApplyCompliance(
+                    new ComplianceDecision(
+                        OrderId,
+                        kind == ReviewActionKind.Approve ? ComplianceOutcome.Approved : ComplianceOutcome.Rejected,
+                        [kind == ReviewActionKind.Approve ? "REVIEWER_APPROVED" : "REVIEWER_REJECTED"],
+                        $"reviewer:{reviewer}",
+                        now),
+                    now);
+                break;
+            case ReviewActionKind.FreezeAndReport:
+                if (string.IsNullOrWhiteSpace(reportReference))
+                {
+                    throw new GatewayRuleException("REPORT_REFERENCE_REQUIRED", "Freezing money requires the reference of the report filed.");
+                }
+
+                EnsureStatus(OrderStatus.ComplianceRejected);
+                MoveTo(OrderStatus.Frozen, now, "FROZEN_AND_REPORTED");
+                break;
+            case ReviewActionKind.ReleaseForRefund:
+                EnsureStatus(OrderStatus.Frozen);
+                MoveTo(OrderStatus.RefundPending, now, "RELEASED_FOR_REFUND");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
+        _reviewActions.Add(new ReviewAction(
+            _reviewActions.Count + 1,
+            kind,
+            reviewer,
+            reason,
+            kind == ReviewActionKind.FreezeAndReport ? reportReference : null,
+            now));
     }
 
     public void RecordRefund(FiatRefund refund, DateTimeOffset now)
@@ -364,6 +433,7 @@ public sealed class PaymentOrder
         FiatRefund? refund,
         int confirmations,
         IEnumerable<ComplianceDecision> complianceHistory,
+        IEnumerable<ReviewAction> reviewActions,
         IEnumerable<OrderEvent> events,
         int version)
     {
@@ -380,6 +450,7 @@ public sealed class PaymentOrder
             Version = version,
         };
         order._complianceHistory.AddRange(complianceHistory);
+        order._reviewActions.AddRange(reviewActions.OrderBy(action => action.Sequence));
         order._events.AddRange(events.OrderBy(e => e.Sequence));
         if (order._events.Count == 0)
         {

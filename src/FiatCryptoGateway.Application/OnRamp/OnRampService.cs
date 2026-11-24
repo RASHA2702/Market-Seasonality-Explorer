@@ -206,37 +206,6 @@ public sealed partial class OnRampService(
         }
     }
 
-    /// <summary>A person's decision on an order held for compliance review.</summary>
-    public async Task<PaymentOrder> RecordReviewDecisionAsync(
-        string clientId,
-        Guid orderId,
-        bool approve,
-        string reviewer,
-        CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(reviewer);
-        await using (await locks.AcquireAsync(orderId, cancellationToken))
-        {
-            var order = await GetOrderAsync(clientId, orderId, cancellationToken);
-            if (order.Status != OrderStatus.ComplianceReview)
-            {
-                throw new GatewayRuleException("ORDER_STATE_CONFLICT", "Only an order held for review can be reviewed.");
-            }
-
-            var now = time.GetUtcNow();
-            var decision = new ComplianceDecision(
-                orderId,
-                approve ? ComplianceOutcome.Approved : ComplianceOutcome.Rejected,
-                [approve ? "REVIEWER_APPROVED" : "REVIEWER_REJECTED"],
-                $"reviewer:{reviewer}",
-                now);
-            order.ApplyCompliance(decision, now);
-            await stores.Orders.SaveAsync(order, [], cancellationToken);
-        }
-
-        return await ProcessAsync(orderId, cancellationToken);
-    }
-
     public async Task<int> ExpireOverdueOrdersAsync(CancellationToken cancellationToken)
     {
         var expired = 0;

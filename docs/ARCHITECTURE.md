@@ -39,7 +39,8 @@
 | FiatReceived | ComplianceReview | Screening needs a person (or the screening provider is down) |
 | FiatReceived, ComplianceReview | ComplianceRejected | Screening or a reviewer rejects; the money is held |
 | ComplianceReview | ReadyToSettle | A reviewer approves |
-| ComplianceRejected | RefundPending | A person decides the money may be refunded |
+| ComplianceRejected | Frozen | A reviewer freezes the money and records the reference of the report filed |
+| Frozen | RefundPending | A reviewer releases the money, with a reason (for example an authority's instruction) |
 | ReadyToSettle | CryptoPurchased | The exchange fills |
 | CryptoPurchased | CryptoSent | The transfer is broadcast |
 | CryptoSent | Completed | Required confirmations reached |
@@ -97,8 +98,12 @@ not the customer.
   result approves.
 - Clients see `KYC_REQUIRED`, `KYC_LIMIT_EXCEEDED` or `COUNTRY_NOT_SUPPORTED`. Sanctions and wallet
   findings appear only as `ORDER_NOT_PERMITTED`, so a suspect is not tipped off.
-- Rejected-after-payment funds are held. Refunding them, or freezing and reporting them, is a person's
-  decision (`ApproveRefundAfterRejection`) because the law may forbid a refund.
+- Money from a rejected order is frozen and reported: a reviewer records the report's reference. It can
+  only be refunded later through an explicit, reasoned release. There is no path from rejected straight to
+  refund, in the code or in the database.
+- Reviewers use their own API keys (role `Reviewer`). The queue lists held orders longest-waiting first and
+  flags any waiting longer than `Gateway:Compliance:ReviewSlaHours` (24). Every decision (approve, reject,
+  freeze, release) needs a reason and is kept in an append-only log with the reviewer and time.
 - Limits are per order. Cumulative daily or monthly limits are a policy decision (see docs/decisions.md, question 19).
 
 ## Idempotency and webhooks

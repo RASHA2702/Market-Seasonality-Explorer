@@ -16,7 +16,7 @@ public sealed record SimulatePaymentRequest(decimal? Amount, int? LateByMinutes)
 
 public sealed record SimulateConfirmationsRequest(int? Confirmations);
 
-public sealed record ReviewRequest(bool Approve, string? Reviewer);
+public sealed record ReviewActionRequest(string? Reason, string? ReportReference);
 
 public sealed record ErrorDetail(string Code, string Message);
 
@@ -118,6 +118,68 @@ public sealed record OrderResponse(
             order.Transfer?.TransactionHash,
             order.Confirmations,
             [.. order.Events.Select(e => new OrderEventResponse(e.Sequence, e.From?.ToString(), e.To.ToString(), e.OccurredAt, e.Reason))]);
+    }
+}
+
+public sealed record ComplianceDecisionResponse(string Outcome, IReadOnlyList<string> Reasons, string Screener, DateTimeOffset DecidedAt);
+
+public sealed record ReviewActionResponse(
+    int Sequence,
+    string Action,
+    string Reviewer,
+    string Reason,
+    string? ReportReference,
+    DateTimeOffset OccurredAt);
+
+/// <summary>A held order as the reviewer sees it, including the screening reasons merchants never see.</summary>
+public sealed record ReviewQueueItemResponse(
+    Guid OrderId,
+    string Merchant,
+    string CustomerId,
+    string Status,
+    string SourceCurrency,
+    string SourceAmount,
+    string PivotAmount,
+    DateTimeOffset HeldSince,
+    double WaitingHours,
+    bool Overdue,
+    IReadOnlyList<string> Reasons)
+{
+    public static ReviewQueueItemResponse From(Application.Compliance.ReviewQueueItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var order = item.Order;
+        return new ReviewQueueItemResponse(
+            order.OrderId,
+            order.ClientId,
+            order.CustomerId,
+            order.Status.ToString(),
+            order.Quote.SourceAmount.Asset.Id.ToString(),
+            order.Quote.SourceAmount.ToFixedString(),
+            order.Quote.PivotAmount.ToString(),
+            item.HeldSince,
+            Math.Round(item.Waiting.TotalHours, 1),
+            item.Overdue,
+            order.Compliance?.Reasons ?? []);
+    }
+}
+
+public sealed record ReviewOrderResponse(
+    OrderResponse Order,
+    string Merchant,
+    string? ReportReference,
+    IReadOnlyList<ComplianceDecisionResponse> ComplianceHistory,
+    IReadOnlyList<ReviewActionResponse> ReviewActions)
+{
+    public static ReviewOrderResponse From(PaymentOrder order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        return new ReviewOrderResponse(
+            OrderResponse.From(order),
+            order.ClientId,
+            order.ReportReference,
+            [.. order.ComplianceHistory.Select(d => new ComplianceDecisionResponse(d.Outcome.ToString(), d.Reasons, d.Screener, d.DecidedAt))],
+            [.. order.ReviewActions.Select(a => new ReviewActionResponse(a.Sequence, a.Kind.ToString(), a.Reviewer, a.Reason, a.ReportReference, a.OccurredAt))]);
     }
 }
 

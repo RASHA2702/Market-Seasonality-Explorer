@@ -17,7 +17,7 @@ and API are real and tested, but every bank, exchange, custodian and KYC provide
 | Quotes | Price route with freshness and no-look-ahead checks, service fee (rounded up), spread, network fee, crypto rounded down, min/max limits, 60-second expiry. |
 | Orders | Explicit state machine: fiat captured → compliance → buy → send → confirmations. Late or wrong-amount payments are refunded, never converted. |
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
-| Compliance | KYC level and limits, blocked countries, sanctions match, wallet screening, manual review. Fails closed: a screening outage means human review, never approval. |
+| Compliance | KYC level and limits, blocked countries, sanctions match, wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
 | Tests and CI | 132 .NET tests (6 of them against a real PostgreSQL in Docker), 15 database constraint tests, and a secret scan, run on every push. |
@@ -89,6 +89,17 @@ export ConnectionStrings__Gateway="Host=127.0.0.1;Port=5433;Username=gateway_app
 The API applies database migrations at startup; set `Gateway__Storage__ApplyMigrationsOnStartup=false` to
 apply them yourself with `db/migrate.sh` instead. Several API instances can share one database.
 
+### Reviewer key
+
+The review endpoints need a key with the `Reviewer` role. Create one the same way as in step 1 and add it
+as a second client:
+
+```bash
+export Gateway__ApiKeys__Clients__1__ClientId=compliance-officer
+export Gateway__ApiKeys__Clients__1__KeySha256=<sha256 of the reviewer key>
+export Gateway__ApiKeys__Clients__1__Role=Reviewer
+```
+
 Sandbox test customers: `cust_verified`, `cust_basic` (1,000 USD limit), `cust_unverified`,
 `cust_sanctioned`, `cust_blocked_country`. Special wallet addresses that trigger compliance outcomes
 are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
@@ -103,8 +114,10 @@ are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 | `POST /v1/orders` | Accept a quote. Requires an `Idempotency-Key` header. |
 | `GET /v1/orders/{id}`, `GET /v1/orders/{id}/ledger` | Order status and history; its journal entries. |
 | `POST /v1/webhooks/sandbox-fiat` | Payment-provider webhook (signature-verified, no API key). |
-| `POST /v1/sandbox/orders/{id}/pay`, `/confirm`, `/review` | Simulate payment, on-chain confirmations, and a compliance reviewer. |
-| `GET /v1/sandbox/ledger/balances` | Whole-ledger balances (operator view). |
+| `POST /v1/sandbox/orders/{id}/pay`, `/confirm` | Simulate the customer's payment and on-chain confirmations. |
+| `GET /v1/review/queue`, `GET /v1/review/orders/{id}` | Reviewer keys only: held payments, longest-waiting first, with an overdue flag; full screening reasons and the review log. |
+| `POST /v1/review/orders/{id}/approve`, `/reject`, `/freeze`, `/release` | Reviewer decisions. Each needs a `reason`; `/freeze` also needs the `reportReference` of the report filed. |
+| `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
 
 Errors are `{"error":{"code":"...","message":"..."}}` with stable codes such as `QUOTE_EXPIRED`,
 `KYC_REQUIRED` or `BELOW_MINIMUM_AMOUNT`. Amounts are strings so JSON clients never lose precision.

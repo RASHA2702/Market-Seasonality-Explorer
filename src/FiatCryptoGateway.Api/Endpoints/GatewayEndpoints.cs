@@ -6,12 +6,14 @@ using System.Text.Json;
 using FiatCryptoGateway.Api.Auth;
 using FiatCryptoGateway.Api.Contracts;
 using FiatCryptoGateway.Application;
+using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
+using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Sandbox;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Options;
@@ -32,7 +34,7 @@ public static class GatewayEndpoints
         // Called by the payment provider, not by API clients: authenticated by its signature.
         app.MapPost("/v1/webhooks/sandbox-fiat", ReceiveSandboxFiatWebhook);
 
-        var api = app.MapGroup("/v1").RequireAuthorization().AddEndpointFilter<GatewayErrorFilter>();
+        var api = app.MapGroup("/v1").RequireAuthorization(ApiPolicies.Merchant).AddEndpointFilter<GatewayErrorFilter>();
         api.MapGet("/assets", ListAssets);
         api.MapPost("/quotes", CreateQuote);
         api.MapPost("/orders", CreateOrder);
@@ -40,11 +42,23 @@ public static class GatewayEndpoints
         api.MapGet("/orders/{orderId:guid}/ledger", GetOrderLedger);
 
         // Simulations that stand in for the outside world while no real provider is connected.
-        var sandbox = app.MapGroup("/v1/sandbox").RequireAuthorization().AddEndpointFilter<GatewayErrorFilter>();
+        var sandbox = app.MapGroup("/v1/sandbox").RequireAuthorization(ApiPolicies.Merchant).AddEndpointFilter<GatewayErrorFilter>();
         sandbox.MapPost("/orders/{orderId:guid}/pay", SimulatePayment);
         sandbox.MapPost("/orders/{orderId:guid}/confirm", SimulateConfirmations);
-        sandbox.MapPost("/orders/{orderId:guid}/review", SimulateReview);
-        sandbox.MapGet("/ledger/balances", GetLedgerBalances);
+
+        // The compliance officer's queue and decisions, across all merchants. Reviewer keys only.
+        var review = app.MapGroup("/v1/review").RequireAuthorization(ApiPolicies.Reviewer).AddEndpointFilter<GatewayErrorFilter>();
+        review.MapGet("/queue", GetReviewQueue);
+        review.MapGet("/orders/{orderId:guid}", GetReviewOrder);
+        review.MapPost("/orders/{orderId:guid}/approve", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.Approve, user, reviews, ct));
+        review.MapPost("/orders/{orderId:guid}/reject", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.Reject, user, reviews, ct));
+        review.MapPost("/orders/{orderId:guid}/freeze", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.FreezeAndReport, user, reviews, ct));
+        review.MapPost("/orders/{orderId:guid}/release", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, ct));
+        review.MapGet("/ledger/balances", GetLedgerBalances);
         return app;
     }
 
@@ -255,20 +269,28 @@ public static class GatewayEndpoints
             await onRamp.RecordConfirmationsAsync(clientId, orderId, transfer.TransactionHash, confirmations, cancellationToken));
     }
 
-    private static async Task<OrderResponse> SimulateReview(
-        Guid orderId,
-        ReviewRequest request,
-        ClaimsPrincipal user,
-        OnRampService onRamp,
+    private static async Task<IEnumerable<ReviewQueueItemResponse>> GetReviewQueue(
+        ComplianceReviewService reviews,
         CancellationToken cancellationToken) =>
-        OrderResponse.From(await onRamp.RecordReviewDecisionAsync(
-            user.GetClientId(),
-            orderId,
-            request.Approve,
-            string.IsNullOrWhiteSpace(request.Reviewer) ? "sandbox-reviewer" : request.Reviewer,
-            cancellationToken));
+        (await reviews.GetQueueAsync(cancellationToken)).Select(ReviewQueueItemResponse.From);
 
-    /// <summary>Operator view of the whole sandbox ledger. A production equivalent needs an admin role.</summary>
+    private static async Task<ReviewOrderResponse> GetReviewOrder(
+        Guid orderId,
+        ComplianceReviewService reviews,
+        CancellationToken cancellationToken) =>
+        ReviewOrderResponse.From(await reviews.GetOrderAsync(orderId, cancellationToken));
+
+    private static async Task<ReviewOrderResponse> Review(
+        Guid orderId,
+        ReviewActionRequest? request,
+        ReviewActionKind kind,
+        ClaimsPrincipal user,
+        ComplianceReviewService reviews,
+        CancellationToken cancellationToken) =>
+        ReviewOrderResponse.From(await reviews.ReviewAsync(
+            orderId, kind, user.GetClientId(), request?.Reason ?? string.Empty, request?.ReportReference, cancellationToken));
+
+    /// <summary>Whole-ledger balances across all merchants. Reviewer keys only.</summary>
     private static async Task<LedgerBalancesResponse> GetLedgerBalances(ILedgerStore ledger, CancellationToken cancellationToken)
     {
         var balances = LedgerBalances.Compute(await ledger.ListAsync(orderId: null, cancellationToken));

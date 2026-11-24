@@ -60,7 +60,7 @@ public sealed class StorageInitializationService(
     public Task StartAsync(CancellationToken cancellationToken) =>
         initializer.InitializeAsync(
             catalog.Assets,
-            apiKeys.Value.Clients.Select(client => new ApiClientRecord(client.ClientId, client.KeySha256)),
+            apiKeys.Value.Clients.Select(client => new ApiClientRecord(client.ClientId, client.KeySha256, Enum.Parse<ApiClientRole>(client.Role))),
             cancellationToken);
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

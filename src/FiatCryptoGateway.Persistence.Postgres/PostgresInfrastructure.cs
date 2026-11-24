@@ -195,15 +195,16 @@ public sealed class PostgresStorageInitializer(NpgsqlDataSource dataSource, Post
         {
             await using var upsert = new NpgsqlCommand(
                 """
-                INSERT INTO gateway.api_client (client_id, display_name, key_sha256)
-                VALUES (@client, @client, @hash)
-                ON CONFLICT (client_id) DO UPDATE SET key_sha256 = EXCLUDED.key_sha256, revoked_at = NULL
+                INSERT INTO gateway.api_client (client_id, display_name, key_sha256, role)
+                VALUES (@client, @client, @hash, @role)
+                ON CONFLICT (client_id) DO UPDATE SET key_sha256 = EXCLUDED.key_sha256, role = EXCLUDED.role, revoked_at = NULL
                 """,
                 connection,
                 transaction);
             await upsert
                 .With("client", client.ClientId)
                 .With("hash", Convert.ToHexStringLower(Convert.FromHexString(client.KeySha256)))
+                .With("role", DbNames.Of(client.Role))
                 .ExecuteNonQueryAsync(cancellationToken);
         }
 

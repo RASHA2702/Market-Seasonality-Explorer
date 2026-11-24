@@ -119,7 +119,13 @@ public sealed class OrderConcurrencyException : Exception
     }
 }
 
-public sealed record ApiClientRecord(string ClientId, string KeySha256);
+public enum ApiClientRole
+{
+    Merchant,
+    Reviewer,
+}
+
+public sealed record ApiClientRecord(string ClientId, string KeySha256, ApiClientRole Role);
 
 /// <summary>Prepares storage at startup: schema migrations and reference data (assets, API clients).</summary>
 public interface IStorageInitializer

@@ -126,6 +126,9 @@ public sealed class ComplianceOptions
     /// <summary>Orders at or above this amount, in the pivot currency, wait for a person to review them.</summary>
     public decimal ManualReviewThreshold { get; set; } = 5_000m;
 
+    /// <summary>Held orders waiting longer than this are flagged as overdue in the review queue.</summary>
+    public int ReviewSlaHours { get; set; } = 24;
+
     public CompliancePolicy ToPolicy() =>
         new(BlockedCountries.ToHashSet(StringComparer.Ordinal), BasicKycLimit, FullKycLimit, ManualReviewThreshold);
 }

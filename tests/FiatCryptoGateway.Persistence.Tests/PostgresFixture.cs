@@ -41,7 +41,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         var keyHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("test-only-key")));
         await services.GetRequiredService<IStorageInitializer>().InitializeAsync(
             services.GetRequiredService<AssetCatalog>().Assets,
-            [new ApiClientRecord(ClientId, keyHash)],
+            [new ApiClientRecord(ClientId, keyHash, ApiClientRole.Merchant)],
             CancellationToken.None);
     }
 

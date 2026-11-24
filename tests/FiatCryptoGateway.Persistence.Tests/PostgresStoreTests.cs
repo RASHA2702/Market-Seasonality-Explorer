@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Domain.Ledger;
@@ -10,7 +12,7 @@ using Npgsql;
 namespace FiatCryptoGateway.Persistence.Tests;
 
 [Collection(SharedPostgres.Name)]
-public sealed class PostgresStoreTests(PostgresFixture fixture)
+public sealed partial class PostgresStoreTests(PostgresFixture fixture)
 {
     private const string Client = PostgresFixture.ClientId;
     private const string Address = "0x1111111111111111111111111111111111111111";
@@ -26,7 +28,7 @@ public sealed class PostgresStoreTests(PostgresFixture fixture)
 
         await using var connection = await services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
         await using var command = new NpgsqlCommand("SELECT string_agg(version, ',' ORDER BY version) FROM ops.schema_migration", connection);
-        Assert.Equal("001_gateway_foundation,002_persistence", await command.ExecuteScalarAsync());
+        Assert.Equal(string.Join(',', MigrationFileVersions()), await command.ExecuteScalarAsync());
     }
 
     [Fact]
@@ -150,12 +152,96 @@ public sealed class PostgresStoreTests(PostgresFixture fixture)
         Assert.True(await inbox.TryClaimAsync("sandbox-fiat", eventId, hash, None));
     }
 
-    private static async Task<PaymentOrder> CreateOrderAsync(ServiceProvider services)
+    [Fact]
+    public async Task DatabaseStateMachine_MatchesTheCode()
+    {
+        await using var services = fixture.BuildServices(TimeProvider.System);
+        await using var connection = await services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+
+        var statuses = new Dictionary<string, bool>(StringComparer.Ordinal);
+        await using (var command = new NpgsqlCommand("SELECT status, is_terminal FROM gateway.order_status", connection))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                statuses[reader.GetString(0)] = reader.GetBoolean(1);
+            }
+        }
+
+        var transitions = new List<string>();
+        await using (var command = new NpgsqlCommand("SELECT from_status || '->' || to_status FROM gateway.order_transition", connection))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                transitions.Add(reader.GetString(0));
+            }
+        }
+
+        var all = Enum.GetValues<OrderStatus>();
+        var expectedTransitions = all
+            .SelectMany(from => all.Where(to => PaymentOrder.IsAllowedTransition(from, to)).Select(to => $"{DbName(from)}->{DbName(to)}"))
+            .Order(StringComparer.Ordinal);
+        var expectedTerminal = all
+            .Where(from => !all.Any(to => PaymentOrder.IsAllowedTransition(from, to)))
+            .Select(DbName)
+            .Order(StringComparer.Ordinal);
+
+        Assert.Equal(all.Select(DbName).Order(StringComparer.Ordinal), statuses.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(expectedTransitions, transitions.Order(StringComparer.Ordinal));
+        Assert.Equal(expectedTerminal, statuses.Where(pair => pair.Value).Select(pair => pair.Key).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReviewActions_AreKeptAndReloaded()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var first = fixture.BuildServices(time);
+        var order = await CreateOrderAsync(first, SandboxWalletScreening.HighRiskAddress);
+        var webhooks = first.GetRequiredService<SandboxFiatWebhookHandler>();
+        var (body, signature) = webhooks.CreateSignedPaymentEvent(order);
+        await webhooks.HandleAsync(body, signature, None);
+
+        var reviews = first.GetRequiredService<ComplianceReviewService>();
+        Assert.Contains(await reviews.GetQueueAsync(None), item => item.Order.OrderId == order.OrderId);
+        await reviews.ReviewAsync(order.OrderId, ReviewActionKind.Reject, "officer", "Wallet linked to a mixer.", null, None);
+        await reviews.ReviewAsync(order.OrderId, ReviewActionKind.FreezeAndReport, "officer", "Reported.", "STR-2026-0042", None);
+
+        await using var second = fixture.BuildServices(time);
+        var reloaded = await second.GetRequiredService<ComplianceReviewService>().GetOrderAsync(order.OrderId, None);
+
+        Assert.Equal(OrderStatus.Frozen, reloaded.Status);
+        Assert.Equal("STR-2026-0042", reloaded.ReportReference);
+        Assert.Equal(
+            [(ReviewActionKind.Reject, "officer", "Wallet linked to a mixer."), (ReviewActionKind.FreezeAndReport, "officer", "Reported.")],
+            reloaded.ReviewActions.Select(action => (action.Kind, action.Reviewer, action.Reason)));
+        Assert.DoesNotContain(await reviews.GetQueueAsync(None), item => item.Order.OrderId == order.OrderId);
+    }
+
+    private static async Task<PaymentOrder> CreateOrderAsync(ServiceProvider services, string address = Address)
     {
         var onRamp = services.GetRequiredService<OnRampService>();
         var quote = await onRamp.CreateQuoteAsync(Client, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
-        return await onRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None);
+        return await onRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, address), None);
     }
+
+    /// <summary>Every file in db/migrations, by version, so a new migration needs no test change.</summary>
+    private static IEnumerable<string> MigrationFileVersions()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FiatCryptoGateway.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        var migrations = Path.Combine(directory?.FullName ?? throw new InvalidOperationException("Repository root not found."), "db", "migrations");
+        return Directory.GetFiles(migrations, "*.sql").Select(Path.GetFileNameWithoutExtension).OfType<string>().Order(StringComparer.Ordinal);
+    }
+
+    private static string DbName(OrderStatus status) => PascalBoundary().Replace(status.ToString(), "_$1").ToUpperInvariant();
+
+    [GeneratedRegex("(?<!^)([A-Z])")]
+    private static partial Regex PascalBoundary();
 
     /// <summary>Records captured fiat without running the next steps, so two instances can race to run them.</summary>
     private static async Task<PaymentOrder> CreatePaidButUnprocessedOrderAsync(ServiceProvider services, TimeProvider time)

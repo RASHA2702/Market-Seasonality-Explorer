@@ -11,10 +11,12 @@ INSERT INTO gateway.asset (asset_key, kind, code, network, scale, network_fee_as
     ('INR', 'FIAT', 'INR', NULL, 2, NULL, 'Indian Rupee'),
     ('USD', 'FIAT', 'USD', NULL, 2, NULL, 'US Dollar'),
     ('ETH@ethereum', 'CRYPTO', 'ETH', 'ethereum', 18, 'ETH@ethereum', 'Ether'),
-    ('USDC@ethereum', 'CRYPTO', 'USDC', 'ethereum', 6, 'ETH@ethereum', 'USD Coin on Ethereum');
+    ('USDC@ethereum', 'CRYPTO', 'USDC', 'ethereum', 6, 'ETH@ethereum', 'USD Coin on Ethereum')
+ON CONFLICT (asset_key) DO NOTHING;
 
 INSERT INTO gateway.api_client (client_id, display_name, key_sha256)
-VALUES ('client-a', 'Test client', repeat('a', 64));
+VALUES ('client-a', 'Test client', repeat('a', 64))
+ON CONFLICT (client_id) DO NOTHING;
 
 INSERT INTO gateway.quote (
     quote_id, client_id, source_asset_key, source_amount, service_fee, net_source_amount,

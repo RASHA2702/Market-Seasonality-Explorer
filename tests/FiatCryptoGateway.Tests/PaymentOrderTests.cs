@@ -181,6 +181,44 @@ public sealed class PaymentOrderTests
         Assert.Equal("QUOTE_NOT_FOUND", exception.Code);
     }
 
+    [Fact]
+    public void RejectedMoney_CannotBeRefundedWithoutFreezingFirst()
+    {
+        var order = Fixtures.Order();
+        order.RecordFiatPayment(Fixtures.Payment(order), Later);
+        order.ApplyCompliance(Fixtures.Decision(order, ComplianceOutcome.Rejected), Later);
+
+        Assert.False(PaymentOrder.IsAllowedTransition(OrderStatus.ComplianceRejected, OrderStatus.RefundPending));
+        var release = Assert.Throws<GatewayRuleException>(() =>
+            order.Review(ReviewActionKind.ReleaseForRefund, "analyst-1", "Too early.", null, Later));
+        Assert.Equal("ORDER_STATE_CONFLICT", release.Code);
+
+        var noReference = Assert.Throws<GatewayRuleException>(() =>
+            order.Review(ReviewActionKind.FreezeAndReport, "analyst-1", "Suspicious.", " ", Later));
+        Assert.Equal("REPORT_REFERENCE_REQUIRED", noReference.Code);
+
+        order.Review(ReviewActionKind.FreezeAndReport, "analyst-1", "Suspicious.", "STR-1", Later);
+        order.Review(ReviewActionKind.ReleaseForRefund, "analyst-2", "Authority allowed release.", null, Later);
+
+        Assert.Equal(OrderStatus.RefundPending, order.Status);
+        Assert.Equal([1, 2], order.ReviewActions.Select(action => action.Sequence));
+        Assert.Equal("STR-1", order.ReportReference);
+    }
+
+    [Fact]
+    public void ReviewWithoutAReason_IsRefused()
+    {
+        var order = Fixtures.Order();
+        order.RecordFiatPayment(Fixtures.Payment(order), Later);
+        order.ApplyCompliance(Fixtures.Decision(order, ComplianceOutcome.ManualReview), Later);
+
+        var exception = Assert.Throws<GatewayRuleException>(() => order.Review(ReviewActionKind.Approve, "analyst-1", "", null, Later));
+
+        Assert.Equal("REASON_REQUIRED", exception.Code);
+        Assert.Equal(OrderStatus.ComplianceReview, order.Status);
+        Assert.Empty(order.ReviewActions);
+    }
+
     [Theory]
     [InlineData(OrderStatus.Completed)]
     [InlineData(OrderStatus.Refunded)]

@@ -1,5 +1,17 @@
 # Change log
 
+## 2026-11-24 — Reviewer queue and audit trail (milestone item 2)
+
+- Reviewer API keys (`Role: Reviewer`) and the `/v1/review` endpoints: a queue of held orders, longest-waiting
+  first, with screening reasons and a 24-hour overdue flag; approve, reject, freeze and release decisions.
+- Money from a rejected order is now frozen and reported (decision: freeze and report). The new `Frozen` state
+  records the report reference; a refund needs a later, reasoned release. The direct rejected-to-refund path
+  is gone, in code and in the database (migration `003_review_queue.sql`).
+- Every review action is kept in an append-only log with reviewer, reason and time; compliance decisions are
+  append-only too.
+- The whole-ledger balance view moved to `/v1/review/ledger/balances`, because it shows every merchant.
+- The check that the database's state machine matches the code now runs against a real migrated database.
+
 ## 2026-11-24 — PostgreSQL storage (milestone item 1)
 
 - New `FiatCryptoGateway.Persistence.Postgres` project: PostgreSQL stores for quotes, orders, order history,

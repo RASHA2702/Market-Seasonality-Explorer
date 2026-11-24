@@ -74,7 +74,7 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await InsertHistoryAsync(connection, transaction, order, storedEvents: 0, storedDecisions: 0, cancellationToken);
+        await InsertHistoryAsync(connection, transaction, order, storedEvents: 0, storedDecisions: 0, storedReviews: 0, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         order.Version = 0;
     }
@@ -86,12 +86,13 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
-        int storedVersion, storedEvents, storedDecisions;
+        int storedVersion, storedEvents, storedDecisions, storedReviews;
         await using (var locked = new NpgsqlCommand(
             """
             SELECT row_version,
                    (SELECT coalesce(max(sequence), 0) FROM gateway.order_event e WHERE e.order_id = o.order_id),
-                   (SELECT coalesce(max(sequence), 0) FROM gateway.compliance_decision d WHERE d.order_id = o.order_id)
+                   (SELECT coalesce(max(sequence), 0) FROM gateway.compliance_decision d WHERE d.order_id = o.order_id),
+                   (SELECT coalesce(max(sequence), 0) FROM gateway.review_action r WHERE r.order_id = o.order_id)
               FROM gateway.payment_order o
              WHERE o.order_id = @id
                FOR UPDATE
@@ -106,7 +107,8 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
                 throw new InvalidOperationException($"Order {order.OrderId} was never added.");
             }
 
-            (storedVersion, storedEvents, storedDecisions) = (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
+            (storedVersion, storedEvents, storedDecisions, storedReviews) =
+                (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
         }
 
         if (storedVersion != order.Version)
@@ -130,7 +132,7 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
             await BindState(update, order).ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await InsertHistoryAsync(connection, transaction, order, storedEvents, storedDecisions, cancellationToken);
+        await InsertHistoryAsync(connection, transaction, order, storedEvents, storedDecisions, storedReviews, cancellationToken);
         await LedgerRows.InsertAsync(connection, transaction, journalEntries, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         order.Version = storedVersion + 1;
@@ -214,6 +216,30 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
             }
         }
 
+        var reviews = new List<ReviewAction>();
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT sequence, action, reviewer, reason, report_reference, occurred_at
+              FROM gateway.review_action
+             WHERE order_id = @id
+             ORDER BY sequence
+            """,
+            connection))
+        {
+            command.With("id", orderId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                reviews.Add(new ReviewAction(
+                    reader.GetInt32(0),
+                    DbNames.Parse<ReviewActionKind>(reader.GetString(1)),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetFieldValue<DateTimeOffset>(5)));
+            }
+        }
+
         var order = PaymentOrder.Restore(
             orderId,
             clientId,
@@ -231,6 +257,7 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
             _mapper.Refund(refund, orderId),
             confirmations,
             decisions,
+            reviews,
             events,
             version);
 
@@ -282,6 +309,7 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
         PaymentOrder order,
         int storedEvents,
         int storedDecisions,
+        int storedReviews,
         CancellationToken cancellationToken)
     {
         foreach (var orderEvent in order.Events.Where(e => e.Sequence > storedEvents))
@@ -320,6 +348,26 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
                 .WithJson("reasons", RecordMapper.Serialize(decision.Reasons))
                 .With("screener", decision.Screener)
                 .With("decided_at", decision.DecidedAt.Utc());
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var review in order.ReviewActions.Where(action => action.Sequence > storedReviews))
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                INSERT INTO gateway.review_action (order_id, sequence, action, reviewer, reason, report_reference, occurred_at)
+                VALUES (@order_id, @sequence, @action, @reviewer, @reason, @report_reference, @occurred_at)
+                """,
+                connection,
+                transaction);
+            command
+                .With("order_id", order.OrderId)
+                .With("sequence", review.Sequence)
+                .With("action", DbNames.Of(review.Kind))
+                .With("reviewer", review.Reviewer)
+                .With("reason", review.Reason)
+                .With("report_reference", review.ReportReference)
+                .With("occurred_at", review.OccurredAt.Utc());
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
     }

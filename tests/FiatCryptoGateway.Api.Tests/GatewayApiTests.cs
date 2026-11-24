@@ -28,6 +28,7 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
 {
     public const string ClientAKey = "test-only-key-client-a";
     public const string ClientBKey = "test-only-key-client-b";
+    public const string ReviewerKey = "test-only-key-reviewer";
 
     public ManualTimeProvider Time { get; } = new(new DateTimeOffset(2026, 11, 24, 12, 0, 0, TimeSpan.Zero));
 
@@ -46,6 +47,9 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Gateway:ApiKeys:Clients:0:KeySha256", Sha256Hex(ClientAKey));
         builder.UseSetting("Gateway:ApiKeys:Clients:1:ClientId", "client-b");
         builder.UseSetting("Gateway:ApiKeys:Clients:1:KeySha256", Sha256Hex(ClientBKey));
+        builder.UseSetting("Gateway:ApiKeys:Clients:2:ClientId", "compliance-officer");
+        builder.UseSetting("Gateway:ApiKeys:Clients:2:KeySha256", Sha256Hex(ReviewerKey));
+        builder.UseSetting("Gateway:ApiKeys:Clients:2:Role", "Reviewer");
         builder.UseSetting("Gateway:Processing:Enabled", "false");
         builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(Time));
     }
@@ -120,8 +124,52 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         var ledger = await client.GetFromJsonAsync<List<LedgerEntryResponse>>($"/v1/orders/{order.OrderId}/ledger");
         Assert.Equal(["FIAT_RECEIVED", "CRYPTO_PURCHASED", "CRYPTO_SENT"], ledger!.Select(entry => entry.Kind));
 
-        var balances = await client.GetFromJsonAsync<LedgerBalancesResponse>("/v1/sandbox/ledger/balances");
+        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        var balances = await reviewer.GetFromJsonAsync<LedgerBalancesResponse>("/v1/review/ledger/balances");
         Assert.True(balances!.BalancedPerAsset);
+    }
+
+    [Fact]
+    public async Task MerchantAndReviewerKeys_CannotUseEachOthersEndpoints()
+    {
+        using var merchant = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
+        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+
+        using var merchantOnQueue = await merchant.GetAsync(new Uri("/v1/review/queue", UriKind.Relative));
+        using var merchantOnLedger = await merchant.GetAsync(new Uri("/v1/review/ledger/balances", UriKind.Relative));
+        using var reviewerOnQuotes = await reviewer.PostAsJsonAsync(
+            new Uri("/v1/quotes", UriKind.Relative), new { sourceCurrency = "INR", sourceAmount = "10000.00", destinationAsset = "USDC@ethereum" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, merchantOnQueue.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, merchantOnLedger.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, reviewerOnQuotes.StatusCode);
+    }
+
+    [Fact]
+    public async Task HeldPayment_IsReviewedWithAReasonOverHttp()
+    {
+        using var merchant = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
+        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        var quote = await CreateQuoteAsync(merchant);
+        using var created = await SendOrderAsync(
+            merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
+        var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
+        var held = await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
+        Assert.Equal("ComplianceReview", held.Status);
+
+        var queue = await reviewer.GetFromJsonAsync<List<ReviewQueueItemResponse>>("/v1/review/queue");
+        var item = Assert.Single(queue!, entry => entry.OrderId == order.OrderId);
+        Assert.Equal("client-a", item.Merchant);
+        Assert.Contains("WALLET_HIGH_RISK", item.Reasons);
+
+        using var noReason = await reviewer.PostAsJsonAsync(new Uri($"/v1/review/orders/{order.OrderId}/approve", UriKind.Relative), new { });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, noReason.StatusCode);
+
+        var reviewed = await PostAsync<ReviewOrderResponse>(
+            reviewer, $"/v1/review/orders/{order.OrderId}/approve", new { reason = "Wallet owner verified by phone." });
+        Assert.Equal("CryptoSent", reviewed.Order.Status);
+        var action = Assert.Single(reviewed.ReviewActions);
+        Assert.Equal(("Approve", "compliance-officer"), (action.Action, action.Reviewer));
     }
 
     [Fact]
@@ -211,11 +259,12 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         HttpClient client,
         Guid quoteId,
         string? key,
-        string customerId = SandboxCustomerDirectory.Verified)
+        string customerId = SandboxCustomerDirectory.Verified,
+        string destinationAddress = Address)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/orders", UriKind.Relative))
         {
-            Content = JsonContent.Create(new { quoteId, customerId, destinationAddress = Address }),
+            Content = JsonContent.Create(new { quoteId, customerId, destinationAddress }),
         };
         if (key is not null)
         {

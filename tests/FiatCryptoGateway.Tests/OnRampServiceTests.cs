@@ -1,4 +1,5 @@
 using FiatCryptoGateway.Application;
+using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Domain;
@@ -36,6 +37,8 @@ public sealed class OnRampServiceTests : IDisposable
     }
 
     private OnRampService OnRamp => _services.GetRequiredService<OnRampService>();
+
+    private ComplianceReviewService Reviews => _services.GetRequiredService<ComplianceReviewService>();
 
     private SandboxFiatWebhookHandler Webhooks => _services.GetRequiredService<SandboxFiatWebhookHandler>();
 
@@ -111,21 +114,53 @@ public sealed class OnRampServiceTests : IDisposable
         Assert.Equal(OrderStatus.ComplianceReview, order.Status);
         Assert.Equal(["SCREENING_UNAVAILABLE"], order.Compliance!.Reasons);
 
-        await OnRamp.RecordReviewDecisionAsync(Client, order.OrderId, approve: true, "analyst-1", None);
+        await Reviews.ReviewAsync(order.OrderId, ReviewActionKind.Approve, "analyst-1", "Wallet checked by hand.", null, None);
         Assert.Equal(OrderStatus.CryptoSent, order.Status);
+        Assert.Equal("analyst-1", order.ReviewActions.Single().Reviewer);
     }
 
     [Fact]
-    public async Task LargeOrder_WaitsForReviewAndCanBeRejected()
+    public async Task RejectedMoney_IsFrozenAndReportedThenRefundedOnlyAfterRelease()
     {
         var order = await CreateOrderAsync(6_000m, currency: "USD");
-
         await PayAsync(order);
         Assert.Equal(OrderStatus.ComplianceReview, order.Status);
 
-        await OnRamp.RecordReviewDecisionAsync(Client, order.OrderId, approve: false, "analyst-1", None);
+        await Reviews.ReviewAsync(order.OrderId, ReviewActionKind.Reject, "analyst-1", "Source of funds not explained.", null, None);
         Assert.Equal(OrderStatus.ComplianceRejected, order.Status);
+
+        await Reviews.ReviewAsync(order.OrderId, ReviewActionKind.FreezeAndReport, "analyst-1", "Reported as suspicious.", "STR-2026-0001", None);
+        Assert.Equal(OrderStatus.Frozen, order.Status);
+        Assert.Equal("STR-2026-0001", order.ReportReference);
+
+        await Reviews.ReviewAsync(order.OrderId, ReviewActionKind.ReleaseForRefund, "analyst-1", "Release instructed in writing.", null, None);
+        Assert.Equal(OrderStatus.Refunded, order.Status);
+
         Assert.Equal(0, _services.GetRequiredService<SandboxLiquidityProvider>().ExecutionCount);
+        Assert.Equal(
+            [ReviewActionKind.Reject, ReviewActionKind.FreezeAndReport, ReviewActionKind.ReleaseForRefund],
+            order.ReviewActions.Select(action => action.Kind));
+        var balances = LedgerBalances.Compute(await Ledger.ListAsync(order.OrderId, None));
+        Assert.All(balances, balance => Assert.Equal(0m, balance.DebitMinusCredit));
+    }
+
+    [Fact]
+    public async Task ReviewQueue_ListsHeldOrdersOldestFirstAndFlagsOverdueOnes()
+    {
+        var older = await CreateOrderAsync(6_000m, currency: "USD");
+        await PayAsync(older);
+        _time.Advance(TimeSpan.FromHours(20));
+        var newer = await CreateOrderAsync(10_000m, address: SandboxWalletScreening.HighRiskAddress);
+        await PayAsync(newer);
+
+        var queue = await Reviews.GetQueueAsync(None);
+        Assert.Equal([older.OrderId, newer.OrderId], queue.Select(item => item.Order.OrderId));
+        Assert.All(queue, item => Assert.False(item.Overdue));
+
+        _time.Advance(TimeSpan.FromHours(5));
+        queue = await Reviews.GetQueueAsync(None);
+        Assert.True(queue[0].Overdue);   // waiting 25 hours, over the 24-hour limit
+        Assert.False(queue[1].Overdue);  // waiting 5 hours
     }
 
     [Fact]

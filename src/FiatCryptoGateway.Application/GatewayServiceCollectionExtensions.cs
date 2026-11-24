@@ -44,6 +44,7 @@ public static class GatewayServiceCollectionExtensions
             provider.GetRequiredService<Ports.IOrderStore>(),
             provider.GetRequiredService<Ports.ILedgerStore>()));
         services.AddSingleton<OnRampService>();
+        services.AddSingleton<ComplianceReviewService>();
         return services;
     }
 }
