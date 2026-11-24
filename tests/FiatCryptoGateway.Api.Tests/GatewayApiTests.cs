@@ -165,7 +165,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
             merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
         var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
         var held = await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
-        Assert.Equal("ComplianceReview", held.Status);
+        Assert.Equal("OnHold", held.Status); // merchants never see review, rejection or freezing as such
 
         var queue = await reviewer.GetFromJsonAsync<List<ReviewQueueItemResponse>>("/v1/review/queue");
         var item = Assert.Single(queue!, entry => entry.OrderId == order.OrderId);
@@ -252,6 +252,35 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
 
         var ledger = await client.GetFromJsonAsync<List<LedgerEntryResponse>>($"/v1/orders/{order.OrderId}/ledger");
         Assert.Single(ledger!, entry => entry.Kind == "FIAT_RECEIVED");
+    }
+
+    [Fact]
+    public async Task FrozenPayment_LooksOnlyOnHoldToTheMerchant()
+    {
+        using var merchant = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
+        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        var quote = await CreateQuoteAsync(merchant);
+        using var created = await SendOrderAsync(
+            merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
+        var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
+        await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
+        await PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/reject", new { reason = "Linked to fraud." });
+        await PostAsync<ReviewOrderResponse>(
+            reviewer, $"/v1/review/orders/{order.OrderId}/freeze", new { reason = "Reported.", reportReference = "STR-77" });
+
+        var merchantBody = await merchant.GetStringAsync(new Uri($"/v1/orders/{order.OrderId}", UriKind.Relative));
+        var merchantView = await merchant.GetFromJsonAsync<OrderResponse>($"/v1/orders/{order.OrderId}");
+
+        Assert.Equal("OnHold", merchantView!.Status);
+        Assert.Single(merchantView.Events, e => e.To == "OnHold");
+        foreach (var word in new[] { "Frozen", "FROZEN", "REJECT", "Reject", "STR-77", "REPORT" })
+        {
+            Assert.DoesNotContain(word, merchantBody, StringComparison.Ordinal);
+        }
+
+        var reviewerView = await reviewer.GetFromJsonAsync<ReviewOrderResponse>($"/v1/review/orders/{order.OrderId}");
+        Assert.Equal("Frozen", reviewerView!.Order.Status);
+        Assert.Equal("STR-77", reviewerView.ReportReference);
     }
 
     private static async Task<QuoteResponse> CreateQuoteAsync(HttpClient client) =>

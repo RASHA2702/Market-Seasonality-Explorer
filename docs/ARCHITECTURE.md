@@ -96,8 +96,11 @@ not the customer.
   complete) and again **after** payment, bound to the order ID.
 - Outcomes: any rejection reason rejects; otherwise any review reason holds the order; only a clean
   result approves.
-- Clients see `KYC_REQUIRED`, `KYC_LIMIT_EXCEEDED` or `COUNTRY_NOT_SUPPORTED`. Sanctions and wallet
-  findings appear only as `ORDER_NOT_PERMITTED`, so a suspect is not tipped off.
+- Clients see `KYC_REQUIRED`, `KYC_LIMIT_EXCEEDED`, `DAILY_LIMIT_EXCEEDED`, `MONTHLY_LIMIT_EXCEEDED` or
+  `COUNTRY_NOT_SUPPORTED`. Sanctions and wallet findings appear only as `ORDER_NOT_PERMITTED`, so a suspect is
+  not tipped off.
+- After payment, merchants see review, rejection and freezing as one `OnHold` step (reason `ON_HOLD`), and a
+  later release as `REFUND_STARTED`; the reviewer API shows the full detail.
 - Money from a rejected order is frozen and reported: a reviewer records the report's reference. It can
   only be refunded later through an explicit, reasoned release. There is no path from rejected straight to
   refund, in the code or in the database.

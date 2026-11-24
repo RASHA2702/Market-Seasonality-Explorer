@@ -1,5 +1,11 @@
 # Change log
 
+## 2026-11-24 — Merchants no longer see compliance detail
+
+- Fixes a tipping-off risk introduced with the review queue: the merchant order API showed statuses such as
+  `Frozen` and reasons such as `FROZEN_AND_REPORTED`. Merchants now see one `OnHold` step for review, rejection
+  and freezing, and `REFUND_STARTED` for a release. Reviewers still see everything.
+
 ## 2026-11-24 — Live-credential guard and partner design (milestone item 4, part)
 
 - `LiveCredentialGuard` refuses, at startup, any provider configured for a non-test environment, a non-test

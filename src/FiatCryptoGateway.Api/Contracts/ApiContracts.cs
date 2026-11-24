@@ -1,4 +1,5 @@
 using System.Globalization;
+using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
@@ -100,12 +101,18 @@ public sealed record OrderResponse(
     int Confirmations,
     IReadOnlyList<OrderEventResponse> Events)
 {
-    public static OrderResponse From(PaymentOrder order)
+    /// <summary>
+    /// The merchant view hides compliance detail (see <see cref="MerchantView"/>); reviewers get the full view.
+    /// </summary>
+    public static OrderResponse From(PaymentOrder order, bool fullDetail = false)
     {
         ArgumentNullException.ThrowIfNull(order);
+        IEnumerable<OrderEventResponse> events = fullDetail
+            ? order.Events.Select(e => new OrderEventResponse(e.Sequence, e.From?.ToString(), e.To.ToString(), e.OccurredAt, e.Reason))
+            : MerchantView.Events(order).Select(e => new OrderEventResponse(e.Sequence, e.From, e.To, e.OccurredAt, e.Reason));
         return new OrderResponse(
             order.OrderId,
-            order.Status.ToString(),
+            fullDetail ? order.Status.ToString() : MerchantView.Status(order.Status),
             order.Quote.QuoteId,
             order.CustomerId,
             order.DestinationAddress,
@@ -117,7 +124,7 @@ public sealed record OrderResponse(
             order.PaymentDeadline,
             order.Transfer?.TransactionHash,
             order.Confirmations,
-            [.. order.Events.Select(e => new OrderEventResponse(e.Sequence, e.From?.ToString(), e.To.ToString(), e.OccurredAt, e.Reason))]);
+            [.. events]);
     }
 }
 
@@ -175,7 +182,7 @@ public sealed record ReviewOrderResponse(
     {
         ArgumentNullException.ThrowIfNull(order);
         return new ReviewOrderResponse(
-            OrderResponse.From(order),
+            OrderResponse.From(order, fullDetail: true),
             order.ClientId,
             order.ReportReference,
             [.. order.ComplianceHistory.Select(d => new ComplianceDecisionResponse(d.Outcome.ToString(), d.Reasons, d.Screener, d.DecidedAt))],
