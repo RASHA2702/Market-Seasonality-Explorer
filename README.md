@@ -22,9 +22,9 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
-| Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
+| Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 286 .NET tests (18 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 292 .NET tests (19 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -149,7 +149,32 @@ JSON body:
 ```
 
 `sequence` numbers the order's steps as the merchant sees them, matching `GET /v1/orders/{id}`. Compliance
-steps appear only as `OnHold`. Any 2xx answer counts as delivered; redirects are not followed. Delivery is
+steps appear only as `OnHold`.
+
+Every change to a merchant's settlement wallets is notified too, as `settlement_wallet.status_changed`, so a
+merchant learns of a wallet it did not register while it is still cooling off and can disable it:
+
+```json
+{
+  "id": "5b1f0d0e-2f7c-4d8e-9a43-6f0c1e2d3b4a",
+  "type": "settlement_wallet.status_changed",
+  "createdAt": "2026-11-25T06:00:00+00:00",
+  "data": {
+    "walletId": "ec05e0b7-9655-4c26-8d3d-a70a427c2437",
+    "network": "polygon",
+    "address": "0x1111111111111111111111111111111111111111",
+    "label": "Treasury",
+    "status": "CoolingOff",
+    "usableFrom": "2026-11-26T06:00:00+00:00",
+    "sequence": 1,
+    "occurredAt": "2026-11-25T06:00:00+00:00"
+  }
+}
+```
+
+Wallet notifications carry the merchant's statuses only, never screening results or a reviewer's reasons.
+
+Any 2xx answer counts as delivered; redirects are not followed. Delivery is
 at least once, so the merchant should ignore an `id` it has already processed. The merchant verifies the
 signature over the raw body before parsing it, for example in Python:
 
@@ -166,8 +191,8 @@ def verify(secret: str, header: str, raw_body: bytes, tolerance_seconds: int = 3
 ```
 
 A failed delivery is retried after 30 seconds, then 1, 2, 4, 8, 16 and 32 minutes, then hourly, up to 10
-attempts (about 3 hours), after which it is recorded as given up. A later notification for the same order waits
-until the earlier one is delivered or given up. These and other settings are under `Gateway:Webhooks`
+attempts (about 3 hours), after which it is recorded as given up. A later notification for the same order or
+wallet waits until the earlier one is delivered or given up. These and other settings are under `Gateway:Webhooks`
 (`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
 `IntervalSeconds`, `Enabled`).
 
@@ -245,6 +270,7 @@ records are kept in memory: after a restart with PostgreSQL storage, payments fr
 | `GET /v1/settlement/wallets`, `POST /v1/settlement/wallets` | The merchant's settlement wallets, newest first; register one (`network`, `address`, optional `label`). |
 | `POST /v1/settlement/wallets/{id}/disable` | Withdraw one of the merchant's wallets. |
 | `GET /v1/review/settlement-wallets`, `GET /v1/review/settlement-wallets/{id}` | Reviewer keys only: wallets waiting for review, with their screening and history. |
+| `GET /v1/review/settlement-wallets/{id}/webhooks` | Reviewer keys only: the merchant notifications about a wallet, with their delivery state. |
 | `POST /v1/review/settlement-wallets/{id}/approve`, `/reject`, `/disable` | Reviewer decisions on a wallet, each with a `reason`. A sanctioned wallet cannot be approved. |
 | `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
 | `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd` | Reviewer keys only: reconciliation runs, newest first, with every difference found. |

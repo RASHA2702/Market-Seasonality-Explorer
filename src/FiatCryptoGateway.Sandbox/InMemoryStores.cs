@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
@@ -261,7 +262,7 @@ public sealed class InMemoryOutbox : IOutbox
         {
             var claimed = _entries
                 .Where(entry => entry.DeliveredAt is null && entry.DeadAt is null)
-                .GroupBy(entry => entry.Message.OrderId)
+                .GroupBy(entry => entry.Message.AggregateId)
                 .Select(order => order.OrderBy(entry => entry.Message.Sequence).First())
                 .Where(entry => entry.NextAttemptAt <= now)
                 .OrderBy(entry => entry.NextAttemptAt)
@@ -300,12 +301,12 @@ public sealed class InMemoryOutbox : IOutbox
             entry.LastError = failure;
         });
 
-    public Task<IReadOnlyList<OutboxMessageStatus>> ListForOrderAsync(Guid orderId, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<OutboxMessageStatus>> ListForAggregateAsync(Guid aggregateId, CancellationToken cancellationToken)
     {
         lock (_gate)
         {
             IReadOnlyList<OutboxMessageStatus> statuses = _entries
-                .Where(entry => entry.Message.OrderId == orderId)
+                .Where(entry => entry.Message.AggregateId == aggregateId)
                 .OrderBy(entry => entry.Message.Sequence)
                 .Select(entry => new OutboxMessageStatus(
                     entry.Message.MessageId, entry.Message.Sequence, entry.Attempts, entry.DeliveredAt, entry.DeadAt, entry.LastError))
@@ -349,8 +350,11 @@ public sealed class InMemoryOutbox : IOutbox
     }
 }
 
-/// <summary>Keeps copies, so a change is visible only once saved and a stale copy cannot overwrite a newer one.</summary>
-public sealed class InMemorySettlementStore : ISettlementStore
+/// <summary>
+/// Keeps copies, so a change is visible only once saved and a stale copy cannot overwrite a newer one. Saving
+/// queues the merchant's notifications together with the change.
+/// </summary>
+public sealed class InMemorySettlementStore(InMemoryOutbox outbox) : ISettlementStore
 {
     private readonly Dictionary<string, MerchantSettlement> _settlements = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
@@ -374,8 +378,10 @@ public sealed class InMemorySettlementStore : ISettlementStore
                 throw new SettlementConcurrencyException();
             }
 
+            var storedActions = stored?.Wallets.ToDictionary(wallet => wallet.WalletId, wallet => wallet.History.Count) ?? [];
             settlement.Version++;
             _settlements[settlement.ClientId] = settlement.Copy();
+            outbox.Enqueue(SettlementNotifications.ForNewActions(settlement, storedActions));
         }
 
         return Task.CompletedTask;

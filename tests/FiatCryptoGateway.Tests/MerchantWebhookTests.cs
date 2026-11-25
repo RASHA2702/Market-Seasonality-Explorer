@@ -56,7 +56,7 @@ public sealed class MerchantNotificationTests
         Assert.Equal("AwaitingFiatPayment", data.GetProperty("status").GetString());
         Assert.Equal(JsonValueKind.Null, data.GetProperty("previousStatus").ValueKind);
         Assert.Equal("ORDER_CREATED", data.GetProperty("reason").GetString());
-        Assert.Equal((Fixtures.ClientId, order.OrderId), (message.ClientId, message.OrderId));
+        Assert.Equal((Fixtures.ClientId, "payment_order", order.OrderId), (message.ClientId, message.AggregateType, message.AggregateId));
     }
 
     private static (string Status, int Sequence) Describe(OutboxMessage message)
@@ -88,7 +88,7 @@ public sealed class MerchantWebhookDispatcherTests
         Assert.False(WebhookSignature.Verify("another-secret-of-thirty-two-chars!!", sent.Signature, sent.Body, harness.Time.GetUtcNow(), TimeSpan.FromMinutes(5)));
         using var json = JsonDocument.Parse(sent.Body);
         Assert.Equal(sent.EventId, json.RootElement.GetProperty("id").GetGuid());
-        var status = Assert.Single(await harness.Outbox.ListForOrderAsync(order.OrderId, None));
+        var status = Assert.Single(await harness.Outbox.ListForAggregateAsync(order.OrderId, None));
         Assert.Equal((1, harness.Time.GetUtcNow()), (status.Attempts, status.DeliveredAt));
         Assert.Equal(0, await harness.Dispatcher.DispatchDueAsync(None));
     }
@@ -133,7 +133,7 @@ public sealed class MerchantWebhookDispatcherTests
         harness.Time.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(1, await harness.Dispatcher.DispatchDueAsync(None)); // attempt 3 fails: give up
 
-        var status = Assert.Single(await harness.Outbox.ListForOrderAsync(order.OrderId, None));
+        var status = Assert.Single(await harness.Outbox.ListForAggregateAsync(order.OrderId, None));
         Assert.Equal((3, "HTTP_500", (DateTimeOffset?)null), (status.Attempts, status.LastError, status.DeliveredAt));
         Assert.Equal(harness.Time.GetUtcNow(), status.DeadAt);
         harness.Time.Advance(TimeSpan.FromDays(1));
@@ -172,8 +172,8 @@ public sealed class MerchantWebhookDispatcherTests
 
         Assert.Equal(2, await harness.Dispatcher.DispatchDueAsync(None));
 
-        Assert.Single(await harness.Outbox.ListForOrderAsync(first.OrderId, None), status => status.DeliveredAt is null);
-        Assert.Single(await harness.Outbox.ListForOrderAsync(second.OrderId, None), status => status.DeliveredAt is not null);
+        Assert.Single(await harness.Outbox.ListForAggregateAsync(first.OrderId, None), status => status.DeliveredAt is null);
+        Assert.Single(await harness.Outbox.ListForAggregateAsync(second.OrderId, None), status => status.DeliveredAt is not null);
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public sealed class MerchantWebhookDispatcherTests
         await harness.Dispatcher.DispatchDueAsync(None);
 
         Assert.Empty(harness.Sender.Sent);
-        var status = Assert.Single(await harness.Outbox.ListForOrderAsync(order.OrderId, None));
+        var status = Assert.Single(await harness.Outbox.ListForAggregateAsync(order.OrderId, None));
         Assert.Equal("NO_WEBHOOK_CONFIGURED", status.LastError);
         Assert.NotNull(status.DeadAt);
     }
@@ -205,7 +205,7 @@ public sealed class MerchantWebhookDispatcherTests
 
         Assert.Equal(1, await harness.Dispatcher.DispatchDueAsync(None));
 
-        var status = Assert.Single(await harness.Outbox.ListForOrderAsync(order.OrderId, None));
+        var status = Assert.Single(await harness.Outbox.ListForAggregateAsync(order.OrderId, None));
         Assert.Equal((1, exceptionType.Name), (status.Attempts, status.LastError));
         Assert.Null(status.DeadAt);
         Assert.Null(status.DeliveredAt);

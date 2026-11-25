@@ -619,13 +619,14 @@ internal static class OutboxRows
                 """
                 INSERT INTO ops.outbox_message (
                     message_id, aggregate_type, aggregate_id, client_id, event_sequence, event_type, payload, occurred_at, next_attempt_at)
-                VALUES (@id, 'payment_order', @order_id, @client, @sequence, @type, @payload, @occurred_at, @occurred_at)
+                VALUES (@id, @aggregate_type, @aggregate_id, @client, @sequence, @type, @payload, @occurred_at, @occurred_at)
                 """,
                 connection,
                 transaction);
             command
                 .With("id", message.MessageId)
-                .With("order_id", message.OrderId)
+                .With("aggregate_type", message.AggregateType)
+                .With("aggregate_id", message.AggregateId)
                 .With("client", message.ClientId)
                 .With("sequence", message.Sequence)
                 .With("type", message.EventType)
@@ -665,7 +666,7 @@ public sealed class PostgresOutbox(NpgsqlDataSource dataSource) : IOutbox
                SET next_attempt_at = @lease_until
               FROM due
              WHERE o.message_id = due.message_id
-            RETURNING o.message_id, o.client_id, o.aggregate_id, o.event_sequence, o.event_type, o.payload::text, o.attempts, o.occurred_at
+            RETURNING o.message_id, o.client_id, o.aggregate_type, o.aggregate_id, o.event_sequence, o.event_type, o.payload::text, o.attempts, o.occurred_at
             """,
             connection);
         command.With("now", now.Utc()).With("limit", limit).With("lease_until", (now + lease).Utc());
@@ -676,12 +677,13 @@ public sealed class PostgresOutbox(NpgsqlDataSource dataSource) : IOutbox
             messages.Add(new OutboxMessage(
                 reader.GetGuid(0),
                 reader.GetString(1),
-                reader.GetGuid(2),
-                reader.GetInt32(3),
-                reader.GetString(4),
+                reader.GetString(2),
+                reader.GetGuid(3),
+                reader.GetInt32(4),
                 reader.GetString(5),
-                reader.GetInt32(6),
-                reader.GetFieldValue<DateTimeOffset>(7)));
+                reader.GetString(6),
+                reader.GetInt32(7),
+                reader.GetFieldValue<DateTimeOffset>(8)));
         }
 
         return messages.AsReadOnly();
@@ -705,18 +707,18 @@ public sealed class PostgresOutbox(NpgsqlDataSource dataSource) : IOutbox
             command => command.With("at", at.Utc()).With("failure", failure).With("id", messageId),
             cancellationToken);
 
-    public async Task<IReadOnlyList<OutboxMessageStatus>> ListForOrderAsync(Guid orderId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<OutboxMessageStatus>> ListForAggregateAsync(Guid aggregateId, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand(
             """
             SELECT message_id, event_sequence, attempts, published_at, dead_at, last_error
               FROM ops.outbox_message
-             WHERE aggregate_id = @order_id
+             WHERE aggregate_id = @aggregate_id
              ORDER BY event_sequence
             """,
             connection);
-        command.With("order_id", orderId);
+        command.With("aggregate_id", aggregateId);
         var statuses = new List<OutboxMessageStatus>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

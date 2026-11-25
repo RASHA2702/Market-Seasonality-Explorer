@@ -67,6 +67,7 @@ public sealed class WebhookOptionsValidator : IValidateOptions<WebhookOptions>
 public static class MerchantNotifications
 {
     public const string StatusChanged = "order.status_changed";
+    public const string OrderAggregate = "payment_order";
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -89,7 +90,8 @@ public static class MerchantNotifications
                     visible.OccurredAt,
                     new StatusChangedData(order.OrderId, visible.Sequence, visible.To, visible.From, visible.Reason, visible.OccurredAt)),
                 Json);
-            messages.Add(new OutboxMessage(messageId, order.ClientId, order.OrderId, sourceSequence, StatusChanged, payload, 0, visible.OccurredAt));
+            messages.Add(new OutboxMessage(
+                messageId, order.ClientId, OrderAggregate, order.OrderId, sourceSequence, StatusChanged, payload, 0, visible.OccurredAt));
         }
 
         return messages.AsReadOnly();

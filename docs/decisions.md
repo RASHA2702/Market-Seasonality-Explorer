@@ -168,7 +168,11 @@ wallet-screening interface.
     wallet it did not add (for example one added with a stolen API key);
   - a risky wallet, or one whose screening could not finish, waits for you to approve or reject it, with a reason;
     a sanctioned wallet can only be rejected;
-  - one wallet per network, and a replacement takes over only when it becomes usable.
+  - one wallet per network, and a replacement takes over only when it becomes usable;
+  - the merchant is notified by webhook of every registration, decision and withdrawal, so it can disable a wallet
+    it did not add while that wallet is still cooling off;
+  - orders pay out only to the merchant's active wallet for the order's network, which is screened again on every
+    order.
 - **[Lawyer]** Whether the gateway (or the partner) must prove that a merchant controls its settlement wallet
   (self-hosted wallet rules under the Travel Rule), and what may be said to a merchant whose wallet is declined.
   Merchants currently see only "UnderReview" and "NotAccepted".

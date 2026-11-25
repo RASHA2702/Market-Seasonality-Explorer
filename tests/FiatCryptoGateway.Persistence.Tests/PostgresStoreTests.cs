@@ -309,7 +309,7 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         var created = await CreateOrderAsync(services);
         var outbox = services.GetRequiredService<IOutbox>();
         var store = services.GetRequiredService<IOrderStore>();
-        Assert.Equal([1], (await outbox.ListForOrderAsync(created.OrderId, None)).Select(status => status.Sequence));
+        Assert.Equal([1], (await outbox.ListForAggregateAsync(created.OrderId, None)).Select(status => status.Sequence));
 
         var current = (await store.FindAsync(created.OrderId, None))!;
         var stale = (await store.FindAsync(created.OrderId, None))!;
@@ -319,7 +319,7 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         await Assert.ThrowsAsync<OrderConcurrencyException>(() => store.SaveAsync(stale, [], None));
 
         // The expiry was queued once; the refused stale save queued nothing.
-        var statuses = await outbox.ListForOrderAsync(created.OrderId, None);
+        var statuses = await outbox.ListForAggregateAsync(created.OrderId, None);
         Assert.Equal([1, 2], statuses.Select(status => status.Sequence));
         Assert.All(statuses, status => Assert.Equal((0, (DateTimeOffset?)null), (status.Attempts, status.DeliveredAt)));
     }
@@ -341,7 +341,7 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         var outboxB = instanceB.GetRequiredService<IOutbox>();
         var now = Start.AddYears(10); // everything in the shared database is due by then
         var lease = TimeSpan.FromMinutes(5);
-        var firstMessageId = (await outboxA.ListForOrderAsync(first.OrderId, None))[0].MessageId;
+        var firstMessageId = (await outboxA.ListForAggregateAsync(first.OrderId, None))[0].MessageId;
 
         // Another instance is in the middle of claiming the first order's opening message, so its row is locked.
         IReadOnlyList<OutboxMessage> claimedByB;
@@ -359,9 +359,9 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         }
 
         // B neither waited for that message nor took it, nor jumped ahead to the first order's next one.
-        Assert.Equal([(second.OrderId, 1)], claimedByB.Where(m => mine.Contains(m.OrderId)).Select(m => (m.OrderId, m.Sequence)));
+        Assert.Equal([(second.OrderId, 1)], claimedByB.Where(m => mine.Contains(m.AggregateId)).Select(m => (m.AggregateId, m.Sequence)));
 
-        var claimedByA = Assert.Single(await outboxA.ClaimDueAsync(now, lease, 10_000, None), m => mine.Contains(m.OrderId));
+        var claimedByA = Assert.Single(await outboxA.ClaimDueAsync(now, lease, 10_000, None), m => mine.Contains(m.AggregateId));
         Assert.Equal((firstMessageId, 1), (claimedByA.MessageId, claimedByA.Sequence));
         using (var payload = JsonDocument.Parse(claimedByA.Payload))
         {
@@ -370,21 +370,21 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         }
 
         // Both messages are leased now: nothing more is handed out for these orders, even the next one in line.
-        Assert.DoesNotContain(await outboxB.ClaimDueAsync(now, lease, 10_000, None), m => mine.Contains(m.OrderId));
+        Assert.DoesNotContain(await outboxB.ClaimDueAsync(now, lease, 10_000, None), m => mine.Contains(m.AggregateId));
 
-        var secondMessage = claimedByB.Single(m => m.OrderId == second.OrderId);
+        var secondMessage = claimedByB.Single(m => m.AggregateId == second.OrderId);
         await outboxA.MarkDeliveredAsync(firstMessageId, now, None);
         await outboxB.ScheduleRetryAsync(secondMessage.MessageId, now.AddMinutes(1), "HTTP_500", None);
-        var next = (await outboxB.ClaimDueAsync(now, lease, 10_000, None)).Where(m => mine.Contains(m.OrderId));
-        Assert.Equal([(first.OrderId, 2)], next.Select(m => (m.OrderId, m.Sequence)));
+        var next = (await outboxB.ClaimDueAsync(now, lease, 10_000, None)).Where(m => mine.Contains(m.AggregateId));
+        Assert.Equal([(first.OrderId, 2)], next.Select(m => (m.AggregateId, m.Sequence)));
 
-        var retry = Assert.Single(await outboxA.ClaimDueAsync(now.AddMinutes(1), lease, 10_000, None), m => mine.Contains(m.OrderId));
+        var retry = Assert.Single(await outboxA.ClaimDueAsync(now.AddMinutes(1), lease, 10_000, None), m => mine.Contains(m.AggregateId));
         Assert.Equal((secondMessage.MessageId, 1), (retry.MessageId, retry.Attempts));
 
         await outboxA.MarkDeadAsync(retry.MessageId, "HTTP_500", now.AddMinutes(1), None);
-        var gaveUp = Assert.Single(await outboxB.ListForOrderAsync(second.OrderId, None));
+        var gaveUp = Assert.Single(await outboxB.ListForAggregateAsync(second.OrderId, None));
         Assert.Equal((2, "HTTP_500", now.AddMinutes(1)), (gaveUp.Attempts, gaveUp.LastError, gaveUp.DeadAt));
-        var delivered = (await outboxB.ListForOrderAsync(first.OrderId, None))[0];
+        var delivered = (await outboxB.ListForAggregateAsync(first.OrderId, None))[0];
         Assert.Equal((1, now), (delivered.Attempts, delivered.DeliveredAt));
     }
 
@@ -501,6 +501,26 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
 
         await Assert.ThrowsAsync<SettlementConcurrencyException>(() => store.SaveAsync(second, None));
         Assert.Single((await store.GetAsync(merchant, None)).Wallets);
+    }
+
+    [Fact]
+    public async Task WalletChanges_QueueTheMerchantsNotificationsInTheSameTransaction()
+    {
+        await using var services = fixture.BuildServices(new ManualTimeProvider(Start));
+        var merchant = await AddMerchantAsync(services);
+        var settlement = services.GetRequiredService<SettlementService>();
+        var outbox = services.GetRequiredService<IOutbox>();
+        var store = services.GetRequiredService<ISettlementStore>();
+        var (wallet, _) = await settlement.RegisterAsync(merchant, "ethereum", SandboxWalletScreening.HighRiskAddress, null, None);
+        var stale = await store.GetAsync(merchant, None);
+        await settlement.ApproveAsync(wallet.WalletId, "officer", "Checked.", None);
+
+        stale.Reject(wallet.WalletId, "officer", "Changed my mind.", Start);
+        await Assert.ThrowsAsync<SettlementConcurrencyException>(() => store.SaveAsync(stale, None));
+
+        // One notification per change that was saved; none for the refused one.
+        var queued = await outbox.ListForAggregateAsync(wallet.WalletId, None);
+        Assert.Equal([1, 2], queued.Select(status => status.Sequence));
     }
 
     [Fact]

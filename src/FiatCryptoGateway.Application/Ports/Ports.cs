@@ -149,10 +149,15 @@ public interface IStorageInitializer
 }
 
 /// <summary>A notification waiting to be sent to a merchant, written in the same transaction as the order change.</summary>
+/// <summary>
+/// A notification for one merchant about one aggregate (an order or a settlement wallet). <see cref="Sequence"/>
+/// orders an aggregate's notifications: they are delivered one at a time, in sequence.
+/// </summary>
 public sealed record OutboxMessage(
     Guid MessageId,
     string ClientId,
-    Guid OrderId,
+    string AggregateType,
+    Guid AggregateId,
     int Sequence,
     string EventType,
     string Payload,
@@ -184,7 +189,7 @@ public interface IOutbox
     /// <summary>Stops retrying a message; it stays recorded with the last error.</summary>
     Task MarkDeadAsync(Guid messageId, string failure, DateTimeOffset at, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<OutboxMessageStatus>> ListForOrderAsync(Guid orderId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<OutboxMessageStatus>> ListForAggregateAsync(Guid aggregateId, CancellationToken cancellationToken);
 }
 
 public sealed record MerchantWebhookTarget(Uri Url, string Secret);

@@ -279,7 +279,7 @@ public sealed class SettlementServiceTests
     [Fact]
     public async Task StaleCopy_CannotOverwriteNewerSettings()
     {
-        var store = new InMemorySettlementStore();
+        var store = new InMemorySettlementStore(new InMemoryOutbox());
         var first = await store.GetAsync(Fixtures.ClientId, None);
         var second = await store.GetAsync(Fixtures.ClientId, None);
         first.Register(Guid.NewGuid(), "polygon", Wallet, null, new WalletScreeningResult(WalletRisk.Low, "test", null), Fixtures.ClientId, Fixtures.Start, TimeSpan.Zero, out _);
@@ -410,5 +410,89 @@ public sealed class OrderSettlementTests
 
         public Task<WalletScreeningResult> ScreenAsync(Domain.Assets.Asset asset, string address, CancellationToken cancellationToken) =>
             Task.FromResult(new WalletScreeningResult(Risk, "switchable-test-screening", null));
+    }
+}
+
+public sealed class SettlementNotificationTests
+{
+    private const string WalletA = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static readonly DateTimeOffset T0 = Fixtures.Start;
+
+    [Fact]
+    public void EachChange_IsDescribedInTheMerchantsTermsOnly()
+    {
+        var settlement = MerchantSettlement.Empty(Fixtures.ClientId);
+        var wallet = settlement.Register(
+            Guid.NewGuid(), "polygon", WalletA, "Treasury", new WalletScreeningResult(WalletRisk.High, "chain-screener", "case-77"),
+            Fixtures.ClientId, T0, TimeSpan.FromHours(24), out _);
+        var registered = SettlementNotifications.ForNewActions(settlement, new Dictionary<Guid, int>());
+        settlement.Approve(wallet.WalletId, "officer", "Verified the owner's identity documents.", T0.AddHours(1));
+        var approved = SettlementNotifications.ForNewActions(settlement, new Dictionary<Guid, int> { [wallet.WalletId] = 1 });
+        settlement.Disable(wallet.WalletId, Fixtures.ClientId, null, T0.AddHours(30));
+        var disabled = SettlementNotifications.ForNewActions(settlement, new Dictionary<Guid, int> { [wallet.WalletId] = 2 });
+
+        var all = registered.Concat(approved).Concat(disabled).ToList();
+        Assert.Equal([("UnderReview", 1), ("CoolingOff", 2), ("Disabled", 3)], all.Select(message => (Data(message).Status, message.Sequence)));
+        Assert.All(all, message =>
+        {
+            Assert.Equal(("settlement_wallet", wallet.WalletId, "settlement_wallet.status_changed"), (message.AggregateType, message.AggregateId, message.EventType));
+            foreach (var word in new[] { "High", "chain-screener", "case-77", "officer", "identity" })
+            {
+                Assert.DoesNotContain(word, message.Payload, StringComparison.Ordinal);
+            }
+        });
+        Assert.Equal((wallet.WalletId, "polygon", WalletA, "Treasury", T0.AddHours(24)), DataTuple(registered[0]));
+    }
+
+    [Theory]
+    [InlineData(24, "CoolingOff")]
+    [InlineData(0, "Active")]
+    public void CleanRegistration_SaysWhenTheWalletCanReceivePayments(int coolingOffHours, string status)
+    {
+        var settlement = MerchantSettlement.Empty(Fixtures.ClientId);
+        settlement.Register(Guid.NewGuid(), "polygon", WalletA, null, new WalletScreeningResult(WalletRisk.Low, "test", null), Fixtures.ClientId, T0, TimeSpan.FromHours(coolingOffHours), out _);
+
+        var message = Assert.Single(SettlementNotifications.ForNewActions(settlement, new Dictionary<Guid, int>()));
+
+        Assert.Equal(status, Data(message).Status);
+    }
+
+    [Fact]
+    public async Task SavingSettings_QueuesTheirNotifications()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(new ManualTimeProvider(T0));
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddGatewayCore(configuration);
+        services.AddSandboxProviders(configuration);
+        services.AddInMemoryStores();
+        await using var provider = services.BuildServiceProvider(validateScopes: true);
+        var settlement = provider.GetRequiredService<SettlementService>();
+
+        var (wallet, _) = await settlement.RegisterAsync(Fixtures.ClientId, "ethereum", SandboxWalletScreening.HighRiskAddress, null, CancellationToken.None);
+        await settlement.ApproveAsync(wallet.WalletId, "officer", "Checked.", CancellationToken.None);
+
+        var queued = await provider.GetRequiredService<IOutbox>().ListForAggregateAsync(wallet.WalletId, CancellationToken.None);
+        Assert.Equal([1, 2], queued.Select(status => status.Sequence));
+    }
+
+    private static (string Status, int Sequence) Data(OutboxMessage message)
+    {
+        using var json = System.Text.Json.JsonDocument.Parse(message.Payload);
+        var data = json.RootElement.GetProperty("data");
+        return (data.GetProperty("status").GetString()!, data.GetProperty("sequence").GetInt32());
+    }
+
+    private static (Guid WalletId, string Network, string Address, string? Label, DateTimeOffset UsableFrom) DataTuple(OutboxMessage message)
+    {
+        using var json = System.Text.Json.JsonDocument.Parse(message.Payload);
+        var data = json.RootElement.GetProperty("data");
+        return (
+            data.GetProperty("walletId").GetGuid(),
+            data.GetProperty("network").GetString()!,
+            data.GetProperty("address").GetString()!,
+            data.GetProperty("label").GetString(),
+            data.GetProperty("usableFrom").GetDateTimeOffset());
     }
 }

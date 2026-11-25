@@ -1,4 +1,5 @@
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Settlement;
 using Npgsql;
@@ -138,6 +139,8 @@ public sealed class PostgresSettlementStore(NpgsqlDataSource dataSource) : ISett
                 await append.ExecuteNonQueryAsync(cancellationToken);
             }
         }
+
+        await OutboxRows.InsertAsync(connection, transaction, SettlementNotifications.ForNewActions(settlement, storedActions), cancellationToken);
 
         await using (var bump = new NpgsqlCommand(
             "UPDATE gateway.merchant_settlement SET row_version = row_version + 1 WHERE client_id = @client", connection, transaction))

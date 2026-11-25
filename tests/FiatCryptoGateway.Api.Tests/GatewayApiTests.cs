@@ -134,8 +134,12 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
                 Assert.DoesNotContain(word, delivery.Body, StringComparison.Ordinal);
             }
         });
-        var notifications = sent.Select(delivery => JsonDocument.Parse(delivery.Body).RootElement).ToList();
-        Assert.Equal(sent.Select(delivery => delivery.EventId), notifications.Select(json => json.GetProperty("id").GetGuid()));
+        Assert.All(sent, delivery => Assert.Equal(delivery.EventId, JsonDocument.Parse(delivery.Body).RootElement.GetProperty("id").GetGuid()));
+        // The order's notifications; registering its wallet sent wallet notifications too.
+        var notifications = sent
+            .Select(delivery => JsonDocument.Parse(delivery.Body).RootElement)
+            .Where(json => json.GetProperty("type").GetString() == "order.status_changed")
+            .ToList();
         var data = notifications.Select(json => json.GetProperty("data")).ToList();
         Assert.Equal(
             ["AwaitingFiatPayment", "FiatReceived", "OnHold", "RefundPending", "Refunded"],
@@ -246,6 +250,64 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         Assert.Equal("UNSUPPORTED_NETWORK", (await badNetwork.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
         using var merchantOnQueue = await merchant.GetAsync(new Uri("/v1/review/settlement-wallets", UriKind.Relative));
         Assert.Equal(HttpStatusCode.Forbidden, merchantOnQueue.StatusCode);
+    }
+
+    [Fact]
+    public async Task WalletChanges_AreNotifiedToTheMerchantSignedAndWithoutScreeningDetail()
+    {
+        var sender = new RecordingWebhookSender();
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 6, 0, 0, TimeSpan.Zero));
+        using var host = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Gateway:Settlement:CoolingOffHours", "24");
+            builder.UseSetting("Gateway:ApiKeys:Clients:0:WebhookUrl", "https://merchant.example/hooks");
+            builder.UseSetting("Gateway:ApiKeys:Clients:0:WebhookSecret", WebhookSecret);
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<TimeProvider>(clock);
+                services.AddSingleton<IWebhookSender>(sender);
+            });
+        });
+        using var merchant = host.CreateClient();
+        merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
+        using var reviewer = host.CreateClient();
+        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        var clean = await PostAsync<SettlementWalletResponse>(merchant, "/v1/settlement/wallets", new { network = "polygon", address = Address }, HttpStatusCode.Created);
+        var risky = await PostAsync<SettlementWalletResponse>(
+            merchant, "/v1/settlement/wallets", new { network = "ethereum", address = SandboxWalletScreening.HighRiskAddress }, HttpStatusCode.Created);
+        await PostAsync<ReviewSettlementWalletResponse>(
+            reviewer, $"/v1/review/settlement-wallets/{risky.WalletId}/approve", new { reason = "Verified the owner's identity documents." });
+
+        var dispatcher = host.Services.GetRequiredService<MerchantWebhookDispatcher>();
+        while (await dispatcher.DispatchDueAsync(CancellationToken.None) > 0)
+        {
+        }
+
+        var now = clock.GetUtcNow();
+        var delivered = sender.Sent
+            .Select(delivery => (delivery, json: JsonDocument.Parse(delivery.Body).RootElement))
+            .Where(item => item.json.GetProperty("type").GetString() == "settlement_wallet.status_changed")
+            .ToList();
+        Assert.Equal(
+            new[] { (clean.WalletId, "CoolingOff"), (risky.WalletId, "UnderReview"), (risky.WalletId, "CoolingOff") }.Order(),
+            delivered.Select(item => (item.json.GetProperty("data").GetProperty("walletId").GetGuid(), item.json.GetProperty("data").GetProperty("status").GetString()!))
+                .Order());
+        // One wallet's notifications arrive in the order they happened.
+        Assert.Equal(
+            ["UnderReview", "CoolingOff"],
+            delivered.Where(item => item.json.GetProperty("data").GetProperty("walletId").GetGuid() == risky.WalletId)
+                .Select(item => item.json.GetProperty("data").GetProperty("status").GetString()));
+        Assert.All(delivered, item =>
+        {
+            Assert.True(WebhookSignature.Verify(WebhookSecret, item.delivery.Signature, item.delivery.Body, now, TimeSpan.FromMinutes(5)));
+            Assert.Equal(item.delivery.EventId, item.json.GetProperty("id").GetGuid());
+            foreach (var word in new[] { "High", "risk", "screen", "officer", "identity" })
+            {
+                Assert.DoesNotContain(word, item.delivery.Body, StringComparison.Ordinal);
+            }
+        });
+        var deliveries = await reviewer.GetFromJsonAsync<List<WebhookDeliveryResponse>>($"/v1/review/settlement-wallets/{risky.WalletId}/webhooks");
+        Assert.Equal([("Delivered", 1), ("Delivered", 2)], deliveries!.Select(d => (d.Status, d.OrderEventSequence)));
     }
 
     [Fact]

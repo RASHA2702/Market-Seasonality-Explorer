@@ -68,6 +68,7 @@ public static class GatewayEndpoints
         review.MapGet("/ledger/balances", GetLedgerBalances);
         review.MapGet("/settlement-wallets", ListSettlementWalletsForReview);
         review.MapGet("/settlement-wallets/{walletId:guid}", GetSettlementWalletForReview);
+        review.MapGet("/settlement-wallets/{walletId:guid}/webhooks", GetWalletWebhookDeliveries);
         review.MapPost("/settlement-wallets/{walletId:guid}/approve", (Guid walletId, ReasonRequest? request, ClaimsPrincipal user, SettlementService settlement, TimeProvider time, CancellationToken ct) =>
             ReviewWallet(settlement.ApproveAsync(walletId, user.GetClientId(), request?.Reason, ct), time));
         review.MapPost("/settlement-wallets/{walletId:guid}/reject", (Guid walletId, ReasonRequest? request, ClaimsPrincipal user, SettlementService settlement, TimeProvider time, CancellationToken ct) =>
@@ -320,7 +321,7 @@ public static class GatewayEndpoints
         CancellationToken cancellationToken)
     {
         await reviews.GetOrderAsync(orderId, cancellationToken); // 404 for an unknown order
-        return (await outbox.ListForOrderAsync(orderId, cancellationToken)).Select(WebhookDeliveryResponse.From);
+        return (await outbox.ListForAggregateAsync(orderId, cancellationToken)).Select(WebhookDeliveryResponse.From);
     }
 
     private static async Task<IEnumerable<SettlementWalletResponse>> ListSettlementWallets(
@@ -369,6 +370,16 @@ public static class GatewayEndpoints
         TimeProvider time,
         CancellationToken cancellationToken) =>
         ReviewSettlementWalletResponse.From(await settlement.GetForReviewAsync(walletId, cancellationToken), time.GetUtcNow());
+
+    private static async Task<IEnumerable<WebhookDeliveryResponse>> GetWalletWebhookDeliveries(
+        Guid walletId,
+        SettlementService settlement,
+        IOutbox outbox,
+        CancellationToken cancellationToken)
+    {
+        await settlement.GetForReviewAsync(walletId, cancellationToken); // 404 for an unknown wallet
+        return (await outbox.ListForAggregateAsync(walletId, cancellationToken)).Select(WebhookDeliveryResponse.From);
+    }
 
     private static async Task<ReviewSettlementWalletResponse> ReviewWallet(Task<SettlementWallet> decision, TimeProvider time) =>
         ReviewSettlementWalletResponse.From(await decision, time.GetUtcNow());

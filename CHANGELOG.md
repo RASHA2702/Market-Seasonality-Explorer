@@ -1,5 +1,14 @@
 # Change log
 
+## 2026-11-25 — Merchants are notified of settlement wallet changes
+
+- Every registration, review decision and withdrawal of a settlement wallet sends the merchant a signed
+  `settlement_wallet.status_changed` notification, written in the same transaction as the change. A merchant thus
+  learns of a wallet it did not register while it is still cooling off. Notifications carry the merchant's statuses
+  only, never screening results or a reviewer's reasons.
+- The outbox now holds notifications for any aggregate (orders and wallets), each delivered in order.
+  `GET /v1/review/settlement-wallets/{id}/webhooks` shows a wallet's deliveries.
+
 ## 2026-11-25 — Orders pay out only to registered wallets
 
 - An order's crypto now goes to the merchant's active settlement wallet for the quote's network. Without one (none

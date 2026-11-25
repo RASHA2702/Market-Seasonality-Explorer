@@ -125,12 +125,13 @@ not the customer.
 
 ## Merchant notifications
 
-Merchants are told about every status change they may see, through the transactional outbox pattern:
+Merchants are told about every order status change they may see and every change to their settlement wallets,
+through the transactional outbox pattern. Each notification belongs to one aggregate (an order or a wallet):
 
-- **Saved with the change.** When an order step is saved, a notification for each new merchant-visible event
-  is written to `ops.outbox_message` in the same transaction. If the step is rolled back or refused (for
-  example a stale copy), no notification exists; if it commits, the notification does. A unique key on
-  (order, event type, event number) stops a step from being queued twice.
+- **Saved with the change.** When an order step or a merchant's settlement settings are saved, a notification for
+  each new merchant-visible event is written to `ops.outbox_message` in the same transaction. If the change is
+  rolled back or refused (for example a stale copy), no notification exists; if it commits, the notification does.
+  A unique key on (aggregate, event type, event number) stops an event from being queued twice.
 - **Merchant view only.** Notifications are built from `MerchantView`: review, rejection and freezing appear
   as one `OnHold` step, and the merchant's events are numbered 1, 2, 3 ... on their own, so gaps in the
   internal numbering cannot reveal hidden steps.
@@ -138,7 +139,7 @@ Merchants are told about every status change they may see, through the transacti
   `next_attempt_at` forward). Two instances never claim the same message, and a message whose sender died
   comes back once the lease ends. A batch is sent one message at a time, so startup refuses a lease shorter
   than `BatchSize x SendTimeoutSeconds`.
-- **Order.** Only the earliest undelivered message of each order can be claimed, so one order's notifications
+- **Order.** Only the earliest undelivered message of each order or wallet can be claimed, so its notifications
   arrive in order. A message that is given up on no longer holds the order back.
 - **Retries.** Failures (a non-2xx answer, a redirect, a timeout, a connection error) are retried with
   exponential backoff; after `MaxAttempts` the message is marked as given up with its last error. Delivery is
