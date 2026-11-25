@@ -150,6 +150,28 @@ Merchants are told about every status change they may see, through the transacti
   URLs. Before merchants can register their own URLs, outbound requests must also refuse private and
   internal addresses (server-side request forgery).
 
+## Reconciliation
+
+- **What is compared.** Each journal entry that records a provider movement carries the provider's own
+  record of it: provider, the provider's ID, amount and the provider's time. A provider's settlement report
+  lists the same movements. Lines and entries are matched by kind and provider ID.
+- **Which day.** Days are calendar days in `Gateway:Reconciliation:TimeZone` (India Standard Time). An entry
+  is expected in a day's report if its provider time falls in that day. A report line matches an entry with
+  the same ID whatever day the entry falls in, so a movement placed just across midnight by either side still
+  matches. The daily run checks yesterday and re-checks the day before, so a movement a provider reports a day
+  late clears on the next run.
+- **Results.** Each run records its counts and every discrepancy: missing in the books, missing in the report,
+  amount or currency mismatch, and duplicates on either side. Runs are append-only evidence; the latest run for a
+  day is its current state. Nothing is corrected automatically.
+- **Several instances.** A run holds a lock per provider and day, and the daily run skips a day already
+  reconciled today, so instances do not repeat each other's work.
+- **Sources.** One `ISettlementReportSource` per provider. The sandbox payment provider builds its report from
+  its own records of captures and refunds, independent of the gateway's books. A partner adapter will fetch the
+  partner's report and map its transaction types to the entry kinds.
+- **Not covered yet.** The sandbox exchange and custodian publish no report (in the partner design, the
+  partner's report covers purchases and transfers), and provider payouts to the company's bank account are not
+  modelled.
+
 ## Persistence
 
 Storage is chosen with `Gateway:Storage:Provider`: `InMemory` (default; lost on restart, one instance only)
@@ -180,5 +202,6 @@ The schema enforces in the database what the domain enforces in code:
 
 - Off-ramp (crypto → fiat) and merchant checkout flows.
 - Any real provider adapter, real KYC, real prices.
-- Admin and reviewer UI, Travel Rule data exchange, reconciliation against provider statements.
+- Admin and reviewer UI, Travel Rule data exchange.
+- Reconciling provider payouts to the company's bank account.
 - Merchants registering their own webhook URLs (needs the private-address protection above).

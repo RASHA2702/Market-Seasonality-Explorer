@@ -10,6 +10,7 @@ using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
@@ -60,6 +61,8 @@ public static class GatewayEndpoints
             Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, ct));
         review.MapGet("/orders/{orderId:guid}/webhooks", GetWebhookDeliveries);
         review.MapGet("/ledger/balances", GetLedgerBalances);
+        review.MapGet("/reconciliation/runs", ListReconciliationRuns);
+        review.MapPost("/reconciliation/runs", RunReconciliation);
         return app;
     }
 
@@ -301,6 +304,36 @@ public static class GatewayEndpoints
         await reviews.GetOrderAsync(orderId, cancellationToken); // 404 for an unknown order
         return (await outbox.ListForOrderAsync(orderId, cancellationToken)).Select(WebhookDeliveryResponse.From);
     }
+
+    /// <summary>Recorded runs, newest first; only one day's when <paramref name="day"/> (yyyy-MM-dd) is given.</summary>
+    private static async Task<IEnumerable<ReconciliationRunResponse>> ListReconciliationRuns(
+        string? day,
+        int? limit,
+        IReconciliationStore store,
+        CancellationToken cancellationToken)
+    {
+        var runs = await store.ListAsync(day is null ? null : ParseDay(day), Math.Clamp(limit ?? 30, 1, 200), cancellationToken);
+        return runs.Select(ReconciliationRunResponse.From);
+    }
+
+    /// <summary>Reconciles a finished day now, for every provider that publishes reports, and returns the new runs.</summary>
+    private static async Task<IEnumerable<ReconciliationRunResponse>> RunReconciliation(
+        ReconcileRequest? request,
+        ReconciliationService reconciliation,
+        CancellationToken cancellationToken)
+    {
+        if (request?.Day is not { } day)
+        {
+            throw new GatewayRuleException("INVALID_REQUEST", "day is required, in the form yyyy-MM-dd.");
+        }
+
+        return (await reconciliation.RunAsync(ParseDay(day), cancellationToken)).Select(ReconciliationRunResponse.From);
+    }
+
+    private static DateOnly ParseDay(string value) =>
+        DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)
+            ? day
+            : throw new GatewayRuleException("INVALID_DAY", "Give the day in the form yyyy-MM-dd.");
 
     private static async Task<LedgerBalancesResponse> GetLedgerBalances(ILedgerStore ledger, CancellationToken cancellationToken)
     {

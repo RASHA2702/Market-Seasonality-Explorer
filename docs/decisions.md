@@ -9,7 +9,7 @@ What has been decided for the crypto payment gateway, what is proposed, and what
 **[Lawyer]** and **[Accountant]** mark points to take to your lawyer or accountant. Nothing in this
 file is legal or tax advice.
 
-Last updated: 2026-11-24.
+Last updated: 2026-11-25.
 
 ## Still needed from you
 
@@ -18,7 +18,7 @@ Last updated: 2026-11-24.
 - Question 6: a written AML/KYC policy.
 - Question 22: brand name and domain.
 - Question 25: renaming the repository.
-- Question 27: launch date and out-of-hours cover.
+- Question 27: launch date, out-of-hours cover, and who checks reconciliation differences each morning.
 - The points marked **[Lawyer]** and **[Accountant]**.
 
 ## ★ Product scope
@@ -115,6 +115,9 @@ list; a parliamentary answer reported 54 registered providers as of 9 March 2026
 (UPI, cards, netbanking, bank transfer) and which coins and networks from question 13; whether they can
 settle merchants in stablecoins and in INR; payer KYC, wallet screening and Travel Rule handling; data kept
 in India; quote-lock length; minimum and maximum amounts; fees; and a test environment with API keys.
+- Built: daily reconciliation against each provider's settlement report. The chosen partner must provide a
+  daily report (by API or file) that lists each movement with the same IDs its webhooks use; ask each candidate
+  for its format, timing and the time zone of its day.
 - Card policy: **PROPOSED** (cards were chosen in question 10): release stablecoins only after the provider
   confirms the payment is captured and 3-D Secure authenticated, and apply lower limits to card payments,
   because a card payment can be charged back weeks later while a crypto transfer cannot be recalled.
@@ -218,3 +221,6 @@ green on its branch), so nothing is lost, and work can resume at any time.
 
 ### 27. Operations and timeline
 **OPEN**: launch date, and who covers incidents, reviews and refunds around the clock.
+- Built: daily reconciliation records every difference between providers' reports and the books, and merchant
+  webhooks record deliveries that failed. Someone needs to check both each morning. A payment missing from the
+  books means a customer has paid for an order that has not moved.

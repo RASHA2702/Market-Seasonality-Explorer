@@ -53,6 +53,11 @@ public static class GatewayServiceCollectionExtensions
             provider.GetRequiredService<Ports.ILedgerStore>()));
         services.AddSingleton<OnRampService>();
         services.AddSingleton<ComplianceReviewService>();
+        services.AddSingleton<IValidateOptions<Reconciliation.ReconciliationOptions>, Reconciliation.ReconciliationOptionsValidator>();
+        services.AddOptions<Reconciliation.ReconciliationOptions>()
+            .Bind(configuration.GetSection(Reconciliation.ReconciliationOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<Reconciliation.ReconciliationService>();
         services.AddSingleton<IValidateOptions<Webhooks.WebhookOptions>, Webhooks.WebhookOptionsValidator>();
         services.AddOptions<Webhooks.WebhookOptions>().Bind(configuration.GetSection(Webhooks.WebhookOptions.SectionName)).ValidateOnStart();
         services.AddSingleton<Webhooks.MerchantWebhookDispatcher>();

@@ -55,6 +55,7 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Gateway:ApiKeys:Clients:2:Role", "Reviewer");
         builder.UseSetting("Gateway:Processing:Enabled", "false");
         builder.UseSetting("Gateway:Webhooks:Enabled", "false"); // tests send notifications by calling the dispatcher
+        builder.UseSetting("Gateway:Reconciliation:Enabled", "false"); // tests start runs through the API
         builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(Time));
     }
 }
@@ -148,6 +149,42 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         Assert.All(deliveries, delivery => Assert.Equal(("Delivered", 1), (delivery.Status, delivery.Attempts)));
         using var merchantOnDeliveries = await merchant.GetAsync(new Uri($"/v1/review/orders/{order.OrderId}/webhooks", UriKind.Relative));
         Assert.Equal(HttpStatusCode.Forbidden, merchantOnDeliveries.StatusCode);
+    }
+
+    [Fact]
+    public async Task Reconciliation_ReviewerRunsAFinishedDayAndSeesWhatDiffers()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 24, 12, 0, 0, TimeSpan.Zero)); // 17:30 IST
+        using var host = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(clock)));
+        using var merchant = host.CreateClient();
+        merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
+        using var reviewer = host.CreateClient();
+        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        var paid = await CreateOrderAsync(merchant, (await CreateQuoteAsync(merchant)).QuoteId, Guid.NewGuid().ToString());
+        await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{paid.OrderId}/pay", new { });
+        var lost = await CreateOrderAsync(merchant, (await CreateQuoteAsync(merchant)).QuoteId, Guid.NewGuid().ToString());
+        var lostOrder = await host.Services.GetRequiredService<OnRampService>().GetOrderAsync("client-a", lost.OrderId, CancellationToken.None);
+        host.Services.GetRequiredService<SandboxFiatWebhookHandler>().CreateSignedPaymentEvent(lostOrder); // its webhook never arrives
+
+        using var tooEarly = await reviewer.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "2026-11-24" });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, tooEarly.StatusCode);
+        Assert.Equal("DAY_NOT_FINISHED", (await tooEarly.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
+
+        clock.Advance(TimeSpan.FromHours(13)); // 06:30 IST the next day
+        var run = Assert.Single(await PostAsync<List<ReconciliationRunResponse>>(reviewer, "/v1/review/reconciliation/runs", new { day = "2026-11-24" }));
+
+        Assert.Equal(("sandbox-fiat", "2026-11-24", 2, 1, false), (run.Provider, run.Day, run.ReportLines, run.Matched, run.Clean));
+        var discrepancy = Assert.Single(run.Discrepancies);
+        Assert.Equal(
+            ("MISSING_IN_LEDGER", "FIAT_RECEIVED", (Guid?)lost.OrderId, "10000.00", "INR", (string?)null),
+            (discrepancy.Type, discrepancy.Kind, discrepancy.OrderId, discrepancy.ReportAmount, discrepancy.ReportAsset, discrepancy.LedgerAmount));
+        var listed = await reviewer.GetFromJsonAsync<List<ReconciliationRunResponse>>("/v1/review/reconciliation/runs?day=2026-11-24");
+        Assert.Equal(run.RunId, Assert.Single(listed!).RunId);
+
+        using var badDay = await reviewer.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "24/11/2026" });
+        Assert.Equal("INVALID_DAY", (await badDay.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
+        using var merchantRun = await merchant.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "2026-11-24" });
+        Assert.Equal(HttpStatusCode.Forbidden, merchantRun.StatusCode);
     }
 
     [Fact]

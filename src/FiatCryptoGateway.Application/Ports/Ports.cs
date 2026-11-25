@@ -1,3 +1,4 @@
+using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Ledger;
@@ -211,6 +212,39 @@ public interface ILedgerStore
     Task AppendAsync(JournalEntry entry, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<JournalEntry>> ListAsync(Guid? orderId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Entries recording a movement by <paramref name="provider"/> that happened (by the provider's clock) in
+    /// [<paramref name="windowStart"/>, <paramref name="windowEnd"/>), plus any of its entries whose provider ID
+    /// is in <paramref name="references"/>, wherever their time falls.
+    /// </summary>
+    Task<IReadOnlyList<JournalEntry>> ListForReconciliationAsync(
+        string provider,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        IReadOnlyCollection<string> references,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>A provider's daily settlement report: what it says it collected, refunded or delivered.</summary>
+public interface ISettlementReportSource
+{
+    string Provider { get; }
+
+    /// <summary>
+    /// The report for <paramref name="day"/>, which covers [<paramref name="windowStart"/>, <paramref name="windowEnd"/>)
+    /// in UTC. A real adapter asks the provider for that day; the window is given for sources that filter records themselves.
+    /// </summary>
+    Task<SettlementReport> GetReportAsync(DateOnly day, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken);
+}
+
+/// <summary>Reconciliation runs. Runs are evidence of what was checked and found, so they are never changed.</summary>
+public interface IReconciliationStore
+{
+    Task SaveAsync(ReconciliationRun run, CancellationToken cancellationToken);
+
+    /// <summary>Newest first; only <paramref name="day"/>'s runs when it is given.</summary>
+    Task<IReadOnlyList<ReconciliationRun>> ListAsync(DateOnly? day, int limit, CancellationToken cancellationToken);
 }
 
 public sealed record StoredResponse(int StatusCode, string Body);

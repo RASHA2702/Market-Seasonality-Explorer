@@ -230,6 +230,7 @@ public static class PostgresServiceCollectionExtensions
         services.AddSingleton<IWebhookInbox, PostgresWebhookInbox>();
         services.AddSingleton<IOrderLocks, PostgresOrderLocks>();
         services.AddSingleton<IOutbox, PostgresOutbox>();
+        services.AddSingleton<IReconciliationStore, PostgresReconciliationStore>();
         services.AddSingleton<IStorageInitializer>(provider => new PostgresStorageInitializer(
             provider.GetRequiredService<NpgsqlDataSource>(),
             provider.GetRequiredService<PostgresMigrator>(),

@@ -42,4 +42,8 @@ public static class OrderLockKeys
     /// <summary>A stable key per customer, so their order creations run one at a time on every instance.</summary>
     public static Guid Customer(string clientId, string customerId) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes($"customer\n{clientId}\n{customerId}")).AsSpan(0, 16));
+
+    /// <summary>One reconciliation of a provider's day at a time, on every instance.</summary>
+    public static Guid Reconciliation(string provider, DateOnly day) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes($"reconciliation\n{provider}\n{day:yyyy-MM-dd}")).AsSpan(0, 16));
 }

@@ -5,9 +5,11 @@ using System.Text;
 using System.Text.Json;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
+using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
 using Microsoft.Extensions.Options;
 
@@ -36,14 +38,36 @@ public sealed class SandboxWebhookSecret
     public string Value { get; }
 }
 
-/// <summary>Creates fake checkout sessions and refunds. Idempotent per order.</summary>
-public sealed class SandboxFiatProvider(TimeProvider time) : IFiatPaymentProvider
+/// <summary>
+/// Creates fake checkout sessions and refunds (idempotent per order), and keeps its own record of the payments it
+/// captured and the refunds it made, independent of the gateway's books, from which it publishes a daily
+/// settlement report as a real provider would.
+/// </summary>
+public sealed class SandboxFiatProvider(TimeProvider time) : IFiatPaymentProvider, ISettlementReportSource
 {
     public const string ProviderName = "sandbox-fiat";
 
     private readonly ConcurrentDictionary<Guid, FiatRefund> _refunds = new();
+    private readonly ConcurrentDictionary<string, FiatPaymentConfirmation> _captures = new(StringComparer.Ordinal);
 
     public string Name => ProviderName;
+
+    public string Provider => ProviderName;
+
+    public Task<SettlementReport> GetReportAsync(DateOnly day, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken)
+    {
+        var payments = _captures.Values
+            .Where(payment => payment.CapturedAt >= windowStart && payment.CapturedAt < windowEnd)
+            .Select(payment => new SettlementLine(EntryKinds.FiatReceived, payment.ProviderPaymentId, payment.OrderId, payment.Amount, payment.CapturedAt));
+        var refunds = _refunds.Values
+            .Where(refund => refund.RefundedAt >= windowStart && refund.RefundedAt < windowEnd)
+            .Select(refund => new SettlementLine(EntryKinds.FiatRefunded, refund.RefundId, refund.OrderId, refund.Amount, refund.RefundedAt));
+        IReadOnlyList<SettlementLine> lines = [.. payments.Concat(refunds).OrderBy(line => line.OccurredAt).ThenBy(line => line.Reference, StringComparer.Ordinal)];
+        return Task.FromResult(new SettlementReport(ProviderName, day, lines));
+    }
+
+    /// <summary>The provider has taken the customer's money, whether or not its webhook ever reaches the gateway.</summary>
+    internal void RecordCapture(FiatPaymentConfirmation payment) => _captures[payment.ProviderPaymentId] = payment;
 
     public Task<FiatPaymentSession> CreateSessionAsync(PaymentOrder order, CancellationToken cancellationToken)
     {
@@ -88,6 +112,7 @@ public sealed class SandboxFiatWebhookHandler(
     IWebhookInbox inbox,
     AssetCatalog catalog,
     OnRampService onRamp,
+    SandboxFiatProvider provider,
     TimeProvider time)
 {
     public const string SignatureHeader = "X-Sandbox-Signature";
@@ -128,7 +153,11 @@ public sealed class SandboxFiatWebhookHandler(
         return WebhookResult.Accepted;
     }
 
-    /// <summary>Builds a signed event exactly as the sandbox provider would deliver it.</summary>
+    /// <summary>
+    /// Captures the customer's payment at the sandbox provider and builds its signed event exactly as the provider
+    /// would deliver it. The capture is in the provider's records (and its settlement report) even if the event is
+    /// never delivered.
+    /// </summary>
     public (string Body, string Signature) CreateSignedPaymentEvent(PaymentOrder order, Money? amount = null, DateTimeOffset? capturedAt = null)
     {
         ArgumentNullException.ThrowIfNull(order);
@@ -142,6 +171,8 @@ public sealed class SandboxFiatWebhookHandler(
             paid.ToFixedString(),
             paid.Asset.Id.Code,
             capturedAt ?? now);
+        provider.RecordCapture(new FiatPaymentConfirmation(
+            SandboxFiatProvider.ProviderName, paymentEvent.PaymentId, order.OrderId, paid, paymentEvent.CapturedAt));
         var body = JsonSerializer.Serialize(paymentEvent, Json);
         return (body, WebhookSignature.Sign(secret.Value, now, body));
     }

@@ -1,5 +1,17 @@
 # Change log
 
+## 2026-11-25 — Daily reconciliation (milestone item 5, part 3)
+
+- Every morning after 06:00 India time, each provider's settlement report for the previous day is compared with
+  the books by the provider's own IDs, and the day before is checked again so a movement reported a day late
+  clears. Differences (missing in the books, missing in the report, amount mismatch, duplicates) are recorded for
+  a person to check; the books are never changed automatically.
+- Reviewers can reconcile a finished day on demand and see past runs: `POST` and `GET /v1/review/reconciliation/runs`.
+- The sandbox payment provider keeps its own record of captures and refunds and publishes a daily report from it,
+  so a payment whose webhook never arrives shows up as `MISSING_IN_LEDGER`.
+- Runs and their discrepancies are stored append-only (migration `007_reconciliation`). Settings under
+  `Gateway:Reconciliation` are checked at startup.
+
 ## 2026-11-24 — Provider references on ledger entries (milestone item 5, part 2)
 
 - Each journal entry that records a provider's money movement now carries the provider's own record of it:

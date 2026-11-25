@@ -37,6 +37,15 @@ public sealed record LedgerAccount(string Code, AssetId Asset)
 
 public sealed record JournalLine(LedgerAccount Account, EntrySide Side, Money Amount);
 
+/// <summary>Kinds of journal entry. Provider settlement reports use the same names for the movements they list.</summary>
+public static class EntryKinds
+{
+    public const string FiatReceived = "FIAT_RECEIVED";
+    public const string CryptoPurchased = "CRYPTO_PURCHASED";
+    public const string CryptoSent = "CRYPTO_SENT";
+    public const string FiatRefunded = "FIAT_REFUNDED";
+}
+
 /// <summary>
 /// The provider's own record of the money movement an entry accounts for: the provider, its ID for the
 /// movement, the amount it moved and when (by the provider's clock). Daily reconciliation matches these
@@ -192,7 +201,7 @@ public static class OnRampPostings
             .Debit(LedgerAccount.PspClearing(payment.Provider, fiat), payment.Amount)
             .Credit(LedgerAccount.CustomerOrders(fiat), payment.Amount)
             .Build(
-                "FIAT_RECEIVED",
+                EntryKinds.FiatReceived,
                 order.OrderId,
                 at,
                 new ExternalReference(payment.Provider, payment.ProviderPaymentId, payment.Amount, payment.CapturedAt));
@@ -219,7 +228,7 @@ public static class OnRampPostings
             .Credit(LedgerAccount.CustomerOrders(crypto), quote.GrossDestinationAmount)
             .Credit(LedgerAccount.Spread(crypto), spread)
             .Build(
-                "CRYPTO_PURCHASED",
+                EntryKinds.CryptoPurchased,
                 order.OrderId,
                 at,
                 new ExternalReference(execution.Provider, execution.ExecutionId, execution.CryptoReceived, execution.ExecutedAt));
@@ -240,7 +249,7 @@ public static class OnRampPostings
             .Debit(LedgerAccount.NetworkFees(feeAsset), transfer.NetworkFeePaid)
             .Credit(LedgerAccount.HotWallet(custodian, feeAsset), transfer.NetworkFeePaid)
             .Build(
-                "CRYPTO_SENT",
+                EntryKinds.CryptoSent,
                 order.OrderId,
                 at,
                 new ExternalReference(transfer.Provider, transfer.TransactionHash, transfer.Amount, transfer.BroadcastAt));
@@ -255,7 +264,7 @@ public static class OnRampPostings
             .Debit(LedgerAccount.CustomerOrders(fiat), refund.Amount)
             .Credit(LedgerAccount.PspClearing(refund.Provider, fiat), refund.Amount)
             .Build(
-                "FIAT_REFUNDED",
+                EntryKinds.FiatRefunded,
                 order.OrderId,
                 at,
                 new ExternalReference(refund.Provider, refund.RefundId, refund.Amount, refund.RefundedAt));

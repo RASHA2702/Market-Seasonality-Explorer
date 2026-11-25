@@ -20,9 +20,10 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
+| Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 208 .NET tests (13 of them against a real PostgreSQL in Docker), 28 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 229 .NET tests (15 of them against a real PostgreSQL in Docker), 33 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -161,6 +162,36 @@ until the earlier one is delivered or given up. These and other settings are und
 (`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
 `IntervalSeconds`, `Enabled`).
 
+### Daily reconciliation
+
+Each morning after 06:00 India time, the API compares every provider's settlement report for the previous
+day (midnight to midnight, India time) with the books, matching movements by the provider's own ID, and
+records the result. It checks the day before again, so a movement a provider reports a day late stops showing
+as a difference. A run never changes the books; each difference is for a person to investigate:
+
+| Code | Meaning | Typical cause |
+|---|---|---|
+| `MISSING_IN_LEDGER` | The provider reports a movement the books do not have. | A payment whose webhook never arrived: the customer has paid, but the order has not moved. The most urgent. |
+| `MISSING_IN_REPORT` | The books have a movement the provider does not report. | The provider placed it on another day, or a recording error. |
+| `AMOUNT_MISMATCH` | Both have it, with different amounts or currencies. | A partial capture, a fee taken out of the amount, or a recording error. |
+| `DUPLICATE_IN_LEDGER`, `DUPLICATE_IN_REPORT` | One movement appears twice on one side. | PostgreSQL refuses to book a movement twice, so a duplicate in the books means data was changed outside the gateway. |
+
+To reconcile a finished day now, and to see past runs (reviewer key):
+
+```bash
+curl -s -X POST http://127.0.0.1:5080/v1/review/reconciliation/runs -H "Authorization: Bearer $reviewer_key" -H "Content-Type: application/json" -d '{"day":"2026-11-24"}'
+```
+
+```bash
+curl -s "http://127.0.0.1:5080/v1/review/reconciliation/runs?day=2026-11-24" -H "Authorization: Bearer $reviewer_key"
+```
+
+Settings are under `Gateway:Reconciliation`: `TimeZone` (default `Asia/Kolkata`), `RunAfterHour` (6),
+`LookbackDays` (2), `CheckIntervalMinutes` (15) and `Enabled`. In the sandbox, the simulated payment provider
+publishes its report from its own records, so a payment made with `/v1/sandbox/orders/{id}/pay` matches. Those
+records are kept in memory: after a restart with PostgreSQL storage, payments from before the restart show as
+`MISSING_IN_REPORT`. A real provider's reports do not forget.
+
 ## API
 
 | Method and path | Purpose |
@@ -176,6 +207,8 @@ until the earlier one is delivered or given up. These and other settings are und
 | `POST /v1/review/orders/{id}/approve`, `/reject`, `/freeze`, `/release` | Reviewer decisions. Each needs a `reason`; `/freeze` also needs the `reportReference` of the report filed. |
 | `GET /v1/review/orders/{id}/webhooks` | Reviewer keys only: each merchant notification for the order, with its delivery state, attempts and last error. |
 | `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
+| `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd` | Reviewer keys only: reconciliation runs, newest first, with every difference found. |
+| `POST /v1/review/reconciliation/runs` | Reviewer keys only: reconcile a finished day now (`{"day":"yyyy-MM-dd"}`). |
 
 Errors are `{"error":{"code":"...","message":"..."}}` with stable codes such as `QUOTE_EXPIRED`,
 `KYC_REQUIRED` or `BELOW_MINIMUM_AMOUNT`. Amounts are strings so JSON clients never lose precision.

@@ -27,7 +27,8 @@ public interface IPaymentPartner
     // payment received, held for review, crypto or INR delivered (with transaction hash), failed, refunded.
     PartnerWebhookResult ParseWebhook(string body, IReadOnlyDictionary<string, string> headers, DateTimeOffset now);
 
-    // The partner's settlement report for one day, used by the daily reconciliation.
+    // The partner's settlement report for one day. Built as ISettlementReportSource: the daily
+    // reconciliation compares it with the books, matching movements by the partner's IDs.
     Task<SettlementReport> GetSettlementReportAsync(DateOnly day, CancellationToken cancellationToken);
 }
 ```
@@ -45,7 +46,7 @@ Other changes:
 - **Merchant settlement settings**: each merchant registers where it is paid: a wallet per network (screened
   when registered) or, for flow 3, a bank account. Payments go there, never to the gateway.
 - **Ledger**: the gateway's books mirror what the partner reports (amounts collected, delivered, fees), in
-  partner-clearing accounts, with no company wallet accounts. The daily reconciliation compares the two.
+  partner-clearing accounts, with no company wallet accounts. The daily reconciliation (built) compares the two.
 - **Order states**: payment received, then delivered by the partner (with the transaction hash), then
   confirmed. Whether a held-for-review step fits between payment and delivery depends on the partner (see
   the questions below).
@@ -62,7 +63,8 @@ Other changes:
 5. Quote lock: how long, and what happens when the customer pays after it expires.
 6. Customer KYC: done by the partner, and what the gateway receives back (status, level, references).
 7. Wallet screening and Travel Rule on its transfers; data kept in India (question 9).
-8. Webhooks: events, signature scheme, retries; and a daily settlement report (format, timing).
+8. Webhooks: events, signature scheme, retries; and a daily settlement report: format, timing, the time zone of
+   its day, and whether each line carries the same IDs as the webhooks (reconciliation matches on them).
 9. Fees and minimum or maximum amounts per method.
 10. A test environment: base URL, test API keys, test webhooks, test networks.
 

@@ -1,6 +1,7 @@
 using System.Globalization;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
@@ -145,6 +146,65 @@ public sealed record WebhookDeliveryResponse(
         var state = status.DeliveredAt is not null ? "Delivered" : status.DeadAt is not null ? "GaveUp" : "Pending";
         return new WebhookDeliveryResponse(
             status.MessageId, status.Sequence, state, status.Attempts, status.DeliveredAt, status.DeadAt, status.LastError);
+    }
+}
+
+public sealed record ReconcileRequest(string? Day);
+
+/// <summary>A difference between a provider's report and the books. Amounts are null for the side that lacks the movement.</summary>
+public sealed record DiscrepancyResponse(
+    string Type,
+    string Kind,
+    string Reference,
+    Guid? OrderId,
+    string? ReportAmount,
+    string? ReportAsset,
+    string? LedgerAmount,
+    string? LedgerAsset)
+{
+    public static DiscrepancyResponse From(Discrepancy discrepancy)
+    {
+        ArgumentNullException.ThrowIfNull(discrepancy);
+        return new DiscrepancyResponse(
+            discrepancy.Code,
+            discrepancy.Kind,
+            discrepancy.Reference,
+            discrepancy.OrderId,
+            discrepancy.ReportAmount?.ToFixedString(),
+            discrepancy.ReportAmount?.Asset.Id.ToString(),
+            discrepancy.LedgerAmount?.ToFixedString(),
+            discrepancy.LedgerAmount?.Asset.Id.ToString());
+    }
+}
+
+public sealed record ReconciliationRunResponse(
+    Guid RunId,
+    string Provider,
+    string Day,
+    DateTimeOffset WindowStart,
+    DateTimeOffset WindowEnd,
+    DateTimeOffset RanAt,
+    int ReportLines,
+    int LedgerEntries,
+    int Matched,
+    bool Clean,
+    IReadOnlyList<DiscrepancyResponse> Discrepancies)
+{
+    public static ReconciliationRunResponse From(ReconciliationRun run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        return new ReconciliationRunResponse(
+            run.RunId,
+            run.Provider,
+            run.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            run.WindowStart,
+            run.WindowEnd,
+            run.RanAt,
+            run.ReportLines,
+            run.LedgerEntries,
+            run.Matched,
+            run.Clean,
+            [.. run.Discrepancies.Select(DiscrepancyResponse.From)]);
     }
 }
 

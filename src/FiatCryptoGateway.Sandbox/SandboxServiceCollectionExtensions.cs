@@ -22,6 +22,7 @@ public static class SandboxServiceCollectionExtensions
         services.AddSingleton<IPriceFeed, SandboxPriceFeed>();
         services.AddSingleton<SandboxFiatProvider>();
         services.AddSingleton<IFiatPaymentProvider>(provider => provider.GetRequiredService<SandboxFiatProvider>());
+        services.AddSingleton<ISettlementReportSource>(provider => provider.GetRequiredService<SandboxFiatProvider>());
         services.AddSingleton<SandboxLiquidityProvider>();
         services.AddSingleton<ILiquidityProvider>(provider => provider.GetRequiredService<SandboxLiquidityProvider>());
         services.AddSingleton<SandboxCustodyProvider>();
@@ -45,6 +46,7 @@ public static class SandboxServiceCollectionExtensions
         services.AddSingleton<IIdempotencyStore, InMemoryIdempotencyStore>();
         services.AddSingleton<IWebhookInbox, InMemoryWebhookInbox>();
         services.AddSingleton<IOrderLocks, InMemoryOrderLocks>();
+        services.AddSingleton<IReconciliationStore, InMemoryReconciliationStore>();
         services.AddSingleton<IStorageInitializer, InMemoryStorageInitializer>();
         return services;
     }

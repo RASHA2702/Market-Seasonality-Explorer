@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
@@ -143,6 +144,58 @@ public sealed class InMemoryLedgerStore : ILedgerStore
                 .ToList()
                 .AsReadOnly();
             return Task.FromResult(entries);
+        }
+    }
+
+    public Task<IReadOnlyList<JournalEntry>> ListForReconciliationAsync(
+        string provider,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        IReadOnlyCollection<string> references,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(references);
+        lock (_gate)
+        {
+            IReadOnlyList<JournalEntry> entries = _entries
+                .Where(entry => entry.External is { } external &&
+                                string.Equals(external.Provider, provider, StringComparison.Ordinal) &&
+                                ((external.OccurredAt >= windowStart && external.OccurredAt < windowEnd) || references.Contains(external.Id)))
+                .ToList()
+                .AsReadOnly();
+            return Task.FromResult(entries);
+        }
+    }
+}
+
+public sealed class InMemoryReconciliationStore : IReconciliationStore
+{
+    private readonly List<ReconciliationRun> _runs = [];
+    private readonly Lock _gate = new();
+
+    public Task SaveAsync(ReconciliationRun run, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        lock (_gate)
+        {
+            _runs.Add(run);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<ReconciliationRun>> ListAsync(DateOnly? day, int limit, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            // Newest first; runs made at the same moment keep the later one first (the sort is stable).
+            IReadOnlyList<ReconciliationRun> runs = Enumerable.Reverse(_runs)
+                .Where(run => day is null || run.Day == day)
+                .OrderByDescending(run => run.RanAt)
+                .Take(limit)
+                .ToList()
+                .AsReadOnly();
+            return Task.FromResult(runs);
         }
     }
 }

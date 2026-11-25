@@ -1,4 +1,5 @@
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Application.Webhooks;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
@@ -444,6 +445,35 @@ public sealed class PostgresLedgerStore(NpgsqlDataSource dataSource, AssetCatalo
         return await ReadEntriesAsync(command, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<JournalEntry>> ListForReconciliationAsync(
+        string provider,
+        DateTimeOffset windowStart,
+        DateTimeOffset windowEnd,
+        IReadOnlyCollection<string> references,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(references);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT e.entry_id, e.kind, e.order_id, e.posted_at, l.account_code, l.asset_key, l.side, trim_scale(l.amount),
+                   e.external_provider, e.external_id, e.external_asset_key, trim_scale(e.external_amount), e.external_occurred_at
+              FROM ledger.journal_entry e
+              JOIN ledger.journal_line l USING (entry_id)
+             WHERE e.external_provider = @provider
+               AND ((e.external_occurred_at >= @window_start AND e.external_occurred_at < @window_end)
+                    OR e.external_id = ANY(@references))
+             ORDER BY e.entry_number, l.line_number
+            """,
+            connection);
+        command
+            .With("provider", provider)
+            .With("window_start", windowStart.Utc())
+            .With("window_end", windowEnd.Utc())
+            .With("references", references.ToArray());
+        return await ReadEntriesAsync(command, cancellationToken);
+    }
+
     /// <summary>Reads rows of entry columns 0-3, line columns 4-7 and provider-reference columns 8-12, ordered by entry.</summary>
     private async Task<IReadOnlyList<JournalEntry>> ReadEntriesAsync(NpgsqlCommand command, CancellationToken cancellationToken)
     {
@@ -709,5 +739,133 @@ public sealed class PostgresOutbox(NpgsqlDataSource dataSource) : IOutbox
         await using var command = new NpgsqlCommand(sql, connection);
         bind(command);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+}
+
+/// <summary>Stores runs and their discrepancies in one transaction; both tables are append-only.</summary>
+public sealed class PostgresReconciliationStore(NpgsqlDataSource dataSource, AssetCatalog catalog) : IReconciliationStore
+{
+    private readonly RecordMapper _mapper = new(catalog);
+
+    public async Task SaveAsync(ReconciliationRun run, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var command = new NpgsqlCommand(
+            """
+            INSERT INTO ops.reconciliation_run (
+                run_id, provider, business_day, window_start, window_end, ran_at, report_lines, ledger_entries, matched, discrepancies)
+            VALUES (@id, @provider, @day, @start, @end, @ran_at, @report_lines, @ledger_entries, @matched, @discrepancies)
+            """,
+            connection,
+            transaction))
+        {
+            command
+                .With("id", run.RunId)
+                .With("provider", run.Provider)
+                .With("day", run.Day)
+                .With("start", run.WindowStart.Utc())
+                .With("end", run.WindowEnd.Utc())
+                .With("ran_at", run.RanAt.Utc())
+                .With("report_lines", run.ReportLines)
+                .With("ledger_entries", run.LedgerEntries)
+                .With("matched", run.Matched)
+                .With("discrepancies", run.Discrepancies.Count);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        for (var index = 0; index < run.Discrepancies.Count; index++)
+        {
+            var discrepancy = run.Discrepancies[index];
+            await using var command = new NpgsqlCommand(
+                """
+                INSERT INTO ops.reconciliation_discrepancy (
+                    run_id, line_number, discrepancy_type, kind, reference, order_id,
+                    report_asset_key, report_amount, ledger_asset_key, ledger_amount)
+                VALUES (@run_id, @line_number, @type, @kind, @reference, @order_id,
+                        @report_asset, @report_amount, @ledger_asset, @ledger_amount)
+                """,
+                connection,
+                transaction);
+            command
+                .With("run_id", run.RunId)
+                .With("line_number", index + 1)
+                .With("type", DbNames.Of(discrepancy.Type))
+                .With("kind", discrepancy.Kind)
+                .With("reference", discrepancy.Reference)
+                .With("order_id", discrepancy.OrderId)
+                .With("report_asset", discrepancy.ReportAmount?.Asset.Id.ToString())
+                .With("report_amount", discrepancy.ReportAmount?.Amount)
+                .With("ledger_asset", discrepancy.LedgerAmount?.Asset.Id.ToString())
+                .With("ledger_amount", discrepancy.LedgerAmount?.Amount);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ReconciliationRun>> ListAsync(DateOnly? day, int limit, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        var runs = new List<(Guid Id, string Provider, DateOnly Day, DateTimeOffset Start, DateTimeOffset End, DateTimeOffset RanAt, int Lines, int Entries, int Matched)>();
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT run_id, provider, business_day, window_start, window_end, ran_at, report_lines, ledger_entries, matched
+              FROM ops.reconciliation_run
+             WHERE @day::date IS NULL OR business_day = @day::date
+             ORDER BY ran_at DESC, run_number DESC
+             LIMIT @limit
+            """,
+            connection))
+        {
+            command.With("day", day).With("limit", limit);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                runs.Add((
+                    reader.GetGuid(0),
+                    reader.GetString(1),
+                    reader.GetFieldValue<DateOnly>(2),
+                    reader.GetFieldValue<DateTimeOffset>(3),
+                    reader.GetFieldValue<DateTimeOffset>(4),
+                    reader.GetFieldValue<DateTimeOffset>(5),
+                    reader.GetInt32(6),
+                    reader.GetInt32(7),
+                    reader.GetInt32(8)));
+            }
+        }
+
+        var discrepancies = runs.ToDictionary(run => run.Id, _ => new List<Discrepancy>());
+        if (runs.Count > 0)
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT run_id, discrepancy_type, kind, reference, order_id,
+                       report_asset_key, trim_scale(report_amount), ledger_asset_key, trim_scale(ledger_amount)
+                  FROM ops.reconciliation_discrepancy
+                 WHERE run_id = ANY(@ids)
+                 ORDER BY run_id, line_number
+                """,
+                connection);
+            command.With("ids", runs.Select(run => run.Id).ToArray());
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                discrepancies[reader.GetGuid(0)].Add(new Discrepancy(
+                    DbNames.Parse<DiscrepancyType>(reader.GetString(1)),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetGuid(4),
+                    reader.IsDBNull(5) ? null : _mapper.Money(reader.GetDecimal(6), reader.GetString(5)),
+                    reader.IsDBNull(7) ? null : _mapper.Money(reader.GetDecimal(8), reader.GetString(7))));
+            }
+        }
+
+        return runs
+            .Select(run => new ReconciliationRun(
+                run.Id, run.Provider, run.Day, run.Start, run.End, run.RanAt, run.Lines, run.Entries, run.Matched, discrepancies[run.Id].AsReadOnly()))
+            .ToList()
+            .AsReadOnly();
     }
 }

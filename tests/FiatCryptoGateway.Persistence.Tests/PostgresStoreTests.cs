@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reconciliation;
+using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Persistence.Postgres;
@@ -376,6 +378,74 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         Assert.Equal((2, "HTTP_500", now.AddMinutes(1)), (gaveUp.Attempts, gaveUp.LastError, gaveUp.DeadAt));
         var delivered = (await outboxB.ListForOrderAsync(first.OrderId, None))[0];
         Assert.Equal((1, now), (delivered.Attempts, delivered.DeliveredAt));
+    }
+
+    [Fact]
+    public async Task ReconciliationRuns_AreKeptUnchangedAndListedNewestFirst()
+    {
+        await using var services = fixture.BuildServices(TimeProvider.System);
+        var store = services.GetRequiredService<IReconciliationStore>();
+        var catalog = services.GetRequiredService<AssetCatalog>();
+        var inr = catalog.Get(AssetId.Fiat("INR"));
+        var day = new DateOnly(2031, 5, 1); // no other test reconciles this day
+        var (start, end) = BusinessDay.Window(day, TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"));
+        var orderId = Guid.NewGuid();
+        Discrepancy[] found =
+        [
+            new(DiscrepancyType.MissingInLedger, "FIAT_RECEIVED", "pay_a", orderId, new Money(10_000m, inr), null),
+            new(DiscrepancyType.MissingInReport, "FIAT_REFUNDED", "rfd_b", null, null, new Money(500.5m, inr)),
+            new(DiscrepancyType.AmountMismatch, "FIAT_RECEIVED", "pay_c", null, new Money(2_000m, inr), new Money(1_999.99m, inr)),
+            new(DiscrepancyType.DuplicateInLedger, "FIAT_RECEIVED", "pay_d", null, new Money(1m, inr), new Money(1m, inr)),
+            new(DiscrepancyType.DuplicateInReport, "FIAT_RECEIVED", "pay_e", null, new Money(3m, inr), null),
+        ];
+        var first = new ReconciliationRun(Guid.NewGuid(), "sandbox-fiat", day, start, end, end.AddHours(12), 6, 5, 1, found);
+        var second = first with { RunId = Guid.NewGuid(), RanAt = end.AddHours(36), Matched = 6, Discrepancies = [] };
+
+        await store.SaveAsync(first, None);
+        await store.SaveAsync(second, None);
+        var runs = await store.ListAsync(day, 10, None);
+
+        Assert.Equal([second.RunId, first.RunId], runs.Select(run => run.RunId));
+        Assert.True(runs[0].Clean);
+        var reloaded = runs[1];
+        Assert.Equal((day, start, end, 6, 5, 1), (reloaded.Day, reloaded.WindowStart, reloaded.WindowEnd, reloaded.ReportLines, reloaded.LedgerEntries, reloaded.Matched));
+        Assert.Equal(found, reloaded.Discrepancies);
+
+        await using var connection = await services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using var edit = new NpgsqlCommand("UPDATE ops.reconciliation_discrepancy SET reference = 'edited' WHERE run_id = @id", connection);
+        edit.Parameters.AddWithValue("id", first.RunId);
+        Assert.Equal("LG003", (await Assert.ThrowsAsync<PostgresException>(() => edit.ExecuteNonQueryAsync())).SqlState);
+    }
+
+    [Fact]
+    public async Task SandboxDay_IsReconciledAgainstTheDatabaseLedger()
+    {
+        // A day of its own (11:30 IST, 15 March 2027), so no other test's entries fall in it.
+        var time = new ManualTimeProvider(new DateTimeOffset(2027, 3, 15, 6, 0, 0, TimeSpan.Zero));
+        await using var services = fixture.BuildServices(time);
+        var webhooks = services.GetRequiredService<SandboxFiatWebhookHandler>();
+        var paid = await CreateOrderAsync(services);
+        var (body, signature) = webhooks.CreateSignedPaymentEvent(paid);
+        Assert.Equal(WebhookResult.Accepted, await webhooks.HandleAsync(body, signature, None));
+        var lost = await CreateOrderAsync(services);
+        webhooks.CreateSignedPaymentEvent(lost); // captured by the provider, never delivered
+
+        time.Advance(TimeSpan.FromDays(1));
+        var run = Assert.Single(await services.GetRequiredService<ReconciliationService>().RunAsync(new DateOnly(2027, 3, 15), None));
+
+        Assert.Equal((2, 1, 1), (run.ReportLines, run.LedgerEntries, run.Matched));
+        var discrepancy = Assert.Single(run.Discrepancies);
+        Assert.Equal((DiscrepancyType.MissingInLedger, (Guid?)lost.OrderId), (discrepancy.Type, discrepancy.OrderId));
+        Assert.Equal(run.RunId, Assert.Single(await services.GetRequiredService<IReconciliationStore>().ListAsync(run.Day, 10, None)).RunId);
+
+        // An entry is found by its time in the day, or by its provider ID from any day, and only for its provider.
+        var ledger = services.GetRequiredService<ILedgerStore>();
+        var paymentId = (await services.GetRequiredService<IOrderStore>().FindAsync(paid.OrderId, None))!.FiatPayment!.ProviderPaymentId;
+        var farAway = new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        Assert.Equal([paymentId], (await ledger.ListForReconciliationAsync("sandbox-fiat", run.WindowStart, run.WindowEnd, [], None)).Select(e => e.External!.Id));
+        Assert.Equal([paymentId], (await ledger.ListForReconciliationAsync("sandbox-fiat", farAway, farAway.AddDays(1), [paymentId], None)).Select(e => e.External!.Id));
+        Assert.Empty(await ledger.ListForReconciliationAsync("sandbox-fiat", farAway, farAway.AddDays(1), [], None));
+        Assert.Empty(await ledger.ListForReconciliationAsync("another-provider", run.WindowStart, run.WindowEnd, [paymentId], None));
     }
 
     private static async Task<PaymentOrder> CreateOrderAsync(ServiceProvider services, string address = Address)
