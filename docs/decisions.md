@@ -135,6 +135,8 @@ remaining exposure is the INR/USD rate.
 **ANSWERED** (2026-11-24): USDT on Tron; USDT and USDC on Polygon; USDT and USDC on Ethereum; USDC and USDT
 on Solana. The final list depends on what the partner supports.
 - Network fees on these are paid in TRX, POL, ETH and SOL respectively.
+- Built: all seven stablecoins and the four networks are in the sandbox, with each network's address format.
+  The sandbox prices, fees and confirmation counts are illustrative; the real ones come from the partner.
 
 ### 14. Liquidity venue (exchange or OTC)
 **ANSWERED**: "We need rethink or redesign that part from what is there now." Then (2026-11-24): your company

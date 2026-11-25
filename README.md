@@ -14,7 +14,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Area | Status |
 |---|---|
 | Currencies | All 156 circulating ISO 4217 currencies with official minor units (JPY 0 decimals, USD 2, KWD 3). Sandbox prices exist for 14 of them; the rest need a real FX source. |
-| Crypto assets | Identified by symbol **and** network (USDC on Ethereum ≠ USDC on Solana). Sandbox: BTC, ETH, SOL, USDC and USDT on Ethereum, USDC on Solana. |
+| Crypto assets | Identified by symbol **and** network (USDC on Ethereum ≠ USDC on Solana). Sandbox: the stablecoins chosen for launch (USDT on Tron; USDT and USDC on Polygon, Ethereum and Solana), each network's native coin (TRX, POL, ETH, SOL), and BTC. |
 | Quotes | Price route with freshness and no-look-ahead checks, service fee (rounded up), spread, network fee, crypto rounded down, min/max limits, 60-second expiry. |
 | Orders | Explicit state machine: fiat captured → compliance → buy → send → confirmations. Late or wrong-amount payments are refunded, never converted. |
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
@@ -23,7 +23,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 229 .NET tests (15 of them against a real PostgreSQL in Docker), 33 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 247 .NET tests (15 of them against a real PostgreSQL in Docker), 33 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).

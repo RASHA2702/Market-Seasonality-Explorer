@@ -1,5 +1,11 @@
 # Change log
 
+## 2026-11-25 — Launch stablecoins in the sandbox
+
+- The sandbox now has every stablecoin chosen in question 13: USDT on Tron, and USDT and USDC on Polygon,
+  Ethereum and Solana, with the native coins that pay their network fees (TRX, POL). Tron and Polygon addresses
+  are checked in their own formats. Prices, fees and confirmation counts are illustrative.
+
 ## 2026-11-25 — Daily reconciliation (milestone item 5, part 3)
 
 - Every morning after 06:00 India time, each provider's settlement report for the previous day is compared with

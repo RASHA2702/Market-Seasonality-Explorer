@@ -10,8 +10,9 @@ using FiatCryptoGateway.Domain.Pricing;
 namespace FiatCryptoGateway.Sandbox;
 
 /// <summary>
-/// The sandbox catalogue: every circulating ISO 4217 currency, plus a few crypto assets. Which coins and
-/// networks the real product supports is a business decision (see docs/OPEN_QUESTIONS.md).
+/// The sandbox catalogue: every circulating ISO 4217 currency, plus crypto assets. The stablecoins are the ones
+/// chosen in docs/decisions.md (question 13): USDT on Tron, USDT and USDC on Polygon, Ethereum and Solana. Each
+/// network's native coin is listed too, because network fees are paid in it.
 /// </summary>
 public static class SandboxAssets
 {
@@ -21,6 +22,12 @@ public static class SandboxAssets
     public static readonly AssetId UsdtEthereum = AssetId.Crypto("USDT", "ethereum");
     public static readonly AssetId Sol = AssetId.Crypto("SOL", "solana");
     public static readonly AssetId UsdcSolana = AssetId.Crypto("USDC", "solana");
+    public static readonly AssetId UsdtSolana = AssetId.Crypto("USDT", "solana");
+    public static readonly AssetId Tron = AssetId.Crypto("TRX", "tron");
+    public static readonly AssetId UsdtTron = AssetId.Crypto("USDT", "tron");
+    public static readonly AssetId Pol = AssetId.Crypto("POL", "polygon");
+    public static readonly AssetId UsdtPolygon = AssetId.Crypto("USDT", "polygon");
+    public static readonly AssetId UsdcPolygon = AssetId.Crypto("USDC", "polygon");
 
     public static IReadOnlyList<Asset> Crypto { get; } =
     [
@@ -30,7 +37,17 @@ public static class SandboxAssets
         Asset.Crypto(UsdtEthereum, 6, "Tether USD on Ethereum", Ether),
         Asset.Crypto(Sol, 9, "Solana", Sol),
         Asset.Crypto(UsdcSolana, 6, "USD Coin on Solana", Sol),
+        Asset.Crypto(UsdtSolana, 6, "Tether USD on Solana", Sol),
+        Asset.Crypto(Tron, 6, "Tron", Tron),
+        Asset.Crypto(UsdtTron, 6, "Tether USD on Tron", Tron),
+        Asset.Crypto(Pol, 18, "Polygon Ecosystem Token", Pol),
+        Asset.Crypto(UsdtPolygon, 6, "Tether USD on Polygon", Pol),
+        Asset.Crypto(UsdcPolygon, 6, "USD Coin on Polygon", Pol),
     ];
+
+    /// <summary>The stablecoins merchants can be settled in (question 13).</summary>
+    public static IReadOnlyList<AssetId> SettlementStablecoins { get; } =
+        [UsdtTron, UsdtPolygon, UsdcPolygon, UsdtEthereum, UsdcEthereum, UsdcSolana, UsdtSolana];
 
     public static AssetCatalog CreateCatalog() => new(Iso4217.All.Concat(Crypto));
 }
@@ -69,6 +86,12 @@ public sealed class SandboxPriceFeed(TimeProvider time) : IPriceFeed
         [SandboxAssets.UsdtEthereum] = 1m,
         [SandboxAssets.Sol] = 150m,
         [SandboxAssets.UsdcSolana] = 1m,
+        [SandboxAssets.UsdtSolana] = 1m,
+        [SandboxAssets.Tron] = 0.25m,
+        [SandboxAssets.UsdtTron] = 1m,
+        [SandboxAssets.Pol] = 0.4m,
+        [SandboxAssets.UsdtPolygon] = 1m,
+        [SandboxAssets.UsdcPolygon] = 1m,
     };
 
     public Task<IReadOnlyList<PriceObservation>> GetRouteAsync(AssetId source, AssetId destination, CancellationToken cancellationToken)
@@ -148,11 +171,13 @@ public sealed partial class SandboxCustodyProvider(AssetCatalog catalog, TimePro
             return false;
         }
 
+        // Polygon is EVM-compatible, so its addresses look like Ethereum's.
         return asset.Id.Network switch
         {
             "bitcoin" => BitcoinAddress().IsMatch(address),
-            "ethereum" => EthereumAddress().IsMatch(address),
+            "ethereum" or "polygon" => EthereumAddress().IsMatch(address),
             "solana" => SolanaAddress().IsMatch(address),
+            "tron" => TronAddress().IsMatch(address),
             _ => false,
         };
     }
@@ -166,6 +191,8 @@ public sealed partial class SandboxCustodyProvider(AssetCatalog catalog, TimePro
             "bitcoin" => 3,
             "ethereum" => 12,
             "solana" => 1,
+            "tron" => 20,
+            "polygon" => 64,
             _ => throw new GatewayRuleException("UNSUPPORTED_ASSET", $"{asset.Id} has no confirmation policy."),
         };
     }
@@ -179,7 +206,10 @@ public sealed partial class SandboxCustodyProvider(AssetCatalog catalog, TimePro
             "ETH@ethereum" => 0.0005m,
             "USDC@ethereum" or "USDT@ethereum" => 1.5m,
             "SOL@solana" => 0.00001m,
-            "USDC@solana" => 0.01m,
+            "USDC@solana" or "USDT@solana" => 0.01m,
+            "TRX@tron" or "USDT@tron" => 1m,
+            "POL@polygon" => 0.01m,
+            "USDC@polygon" or "USDT@polygon" => 0.05m,
             _ => throw new GatewayRuleException("UNSUPPORTED_ASSET", $"The sandbox has no network fee for {asset.Id}."),
         };
         return Task.FromResult(new Money(fee, asset));
@@ -199,6 +229,8 @@ public sealed partial class SandboxCustodyProvider(AssetCatalog catalog, TimePro
         {
             "bitcoin" => 0.000015m,
             "ethereum" => 0.0004m,
+            "tron" => 15m,
+            "polygon" => 0.005m,
             _ => 0.000005m,
         };
         var hash = Convert.ToHexStringLower(SHA256.HashData(order.OrderId.ToByteArray()));
@@ -220,4 +252,8 @@ public sealed partial class SandboxCustodyProvider(AssetCatalog catalog, TimePro
 
     [GeneratedRegex("^[1-9A-HJ-NP-Za-km-z]{32,44}$", RegexOptions.CultureInvariant)]
     private static partial Regex SolanaAddress();
+
+    // Base58, 34 characters, always starting with T. Format only: a real custodian also checks the checksum.
+    [GeneratedRegex("^T[1-9A-HJ-NP-Za-km-z]{33}$", RegexOptions.CultureInvariant)]
+    private static partial Regex TronAddress();
 }
