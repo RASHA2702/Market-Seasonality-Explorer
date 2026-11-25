@@ -3,6 +3,7 @@ using FiatCryptoGateway.Application;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
@@ -177,16 +178,16 @@ public sealed class ReconciliationServiceTests
         var onRamp = services.GetRequiredService<OnRampService>();
         var webhooks = services.GetRequiredService<SandboxFiatWebhookHandler>();
 
-        var paid = await CreateOrderAsync(onRamp);
+        var paid = await CreateOrderAsync(onRamp, services);
         var (body, signature) = webhooks.CreateSignedPaymentEvent(paid);
         Assert.Equal(WebhookResult.Accepted, await webhooks.HandleAsync(body, signature, None));
 
-        var late = await CreateOrderAsync(onRamp); // paid after its deadline, so refunded
+        var late = await CreateOrderAsync(onRamp, services); // paid after its deadline, so refunded
         (body, signature) = webhooks.CreateSignedPaymentEvent(late, capturedAt: late.PaymentDeadline.AddMinutes(1));
         Assert.Equal(WebhookResult.Accepted, await webhooks.HandleAsync(body, signature, None));
         Assert.Equal(OrderStatus.Refunded, (await onRamp.GetOrderAsync(Fixtures.ClientId, late.OrderId, None)).Status);
 
-        var lost = await CreateOrderAsync(onRamp); // the provider took the money, but its webhook never arrived
+        var lost = await CreateOrderAsync(onRamp, services); // the provider took the money, but its webhook never arrived
         webhooks.CreateSignedPaymentEvent(lost);
 
         time.Advance(TimeSpan.FromHours(13)); // 06:30 IST the next day
@@ -228,15 +229,18 @@ public sealed class ReconciliationServiceTests
         Assert.Equal(["11-23", "11-24", "11-24", "11-25"], runs.Select(run => run.Day.ToString("MM-dd", CultureInfo.InvariantCulture)).Order(StringComparer.Ordinal));
     }
 
-    private static async Task<PaymentOrder> CreateOrderAsync(OnRampService onRamp)
+    private static async Task<PaymentOrder> CreateOrderAsync(OnRampService onRamp, IServiceProvider services)
     {
+        await services.GetRequiredService<SettlementService>().RegisterAsync(Fixtures.ClientId, "ethereum", Address, null, None);
         var quote = await onRamp.CreateQuoteAsync(Fixtures.ClientId, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
-        return await onRamp.CreateOrderAsync(Fixtures.ClientId, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None);
+        return await onRamp.CreateOrderAsync(Fixtures.ClientId, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None);
     }
 
     private static ServiceProvider BuildServices(TimeProvider time)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Settlement:CoolingOffHours"] = "0" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton(time);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));

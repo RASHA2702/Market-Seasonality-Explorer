@@ -15,6 +15,7 @@ namespace FiatCryptoGateway.Api.Contracts;
 
 public sealed record CreateQuoteRequest(string? SourceCurrency, decimal? SourceAmount, string? DestinationAsset);
 
+/// <summary><c>DestinationAddress</c> is refused if sent: orders pay out to the merchant's active settlement wallet.</summary>
 public sealed record CreateOrderRequest(Guid? QuoteId, string? CustomerId, string? DestinationAddress);
 
 public sealed record SimulatePaymentRequest(decimal? Amount, int? LateByMinutes);

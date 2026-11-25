@@ -176,15 +176,20 @@ public static class GatewayEndpoints
         try
         {
             var request = JsonSerializer.Deserialize<CreateOrderRequest>(body, json);
-            if (request?.QuoteId is not { } quoteId ||
-                string.IsNullOrWhiteSpace(request.CustomerId) ||
-                string.IsNullOrWhiteSpace(request.DestinationAddress))
+            if (request?.DestinationAddress is not null)
             {
-                return Stored(StatusCodes.Status400BadRequest, "INVALID_REQUEST", "quoteId, customerId and destinationAddress are required.");
+                return Stored(
+                    StatusCodes.Status422UnprocessableEntity,
+                    "DESTINATION_NOT_ACCEPTED",
+                    "Orders pay out to your active settlement wallet for the quote's network; remove destinationAddress.");
             }
 
-            var order = await onRamp.CreateOrderAsync(
-                clientId, new CreateOrderCommand(quoteId, request.CustomerId, request.DestinationAddress), cancellationToken);
+            if (request?.QuoteId is not { } quoteId || string.IsNullOrWhiteSpace(request.CustomerId))
+            {
+                return Stored(StatusCodes.Status400BadRequest, "INVALID_REQUEST", "quoteId and customerId are required.");
+            }
+
+            var order = await onRamp.CreateOrderAsync(clientId, new CreateOrderCommand(quoteId, request.CustomerId), cancellationToken);
             return new StoredResponse(StatusCodes.Status201Created, JsonSerializer.Serialize(OrderResponse.From(order), json));
         }
         catch (JsonException)

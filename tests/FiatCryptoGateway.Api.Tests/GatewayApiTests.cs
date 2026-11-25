@@ -56,6 +56,7 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Gateway:Processing:Enabled", "false");
         builder.UseSetting("Gateway:Webhooks:Enabled", "false"); // tests send notifications by calling the dispatcher
         builder.UseSetting("Gateway:Reconciliation:Enabled", "false"); // tests start runs through the API
+        builder.UseSetting("Gateway:Settlement:CoolingOffHours", "0"); // wallets usable at once; one test checks the real period
         builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(Time));
     }
 }
@@ -109,7 +110,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
         var quote = await CreateQuoteAsync(merchant);
         using var created = await SendOrderAsync(
-            merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
+            merchant, quote.QuoteId, Guid.NewGuid().ToString(), wallet: SandboxWalletScreening.HighRiskAddress, reviewer: reviewer);
         var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
         await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
         await PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/reject", new { reason = "Linked to fraud." });
@@ -192,7 +193,11 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
     public async Task SettlementWallets_MerchantRegistersAndTheReviewerDecidesTheRiskyOnes()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 6, 0, 0, TimeSpan.Zero));
-        using var host = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(clock)));
+        using var host = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Gateway:Settlement:CoolingOffHours", "24"); // the real default
+            builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(clock));
+        });
         using var merchant = host.CreateClient();
         merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
         using var otherMerchant = host.CreateClient();
@@ -241,6 +246,23 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         Assert.Equal("UNSUPPORTED_NETWORK", (await badNetwork.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
         using var merchantOnQueue = await merchant.GetAsync(new Uri("/v1/review/settlement-wallets", UriKind.Relative));
         Assert.Equal(HttpStatusCode.Forbidden, merchantOnQueue.StatusCode);
+    }
+
+    [Fact]
+    public async Task OrderNamingItsOwnDestination_IsRefused()
+    {
+        using var client = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
+        var quote = await CreateQuoteAsync(client);
+        var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/orders", UriKind.Relative))
+        {
+            Content = JsonContent.Create(new { quoteId = quote.QuoteId, customerId = SandboxCustomerDirectory.Verified, destinationAddress = Address }),
+        };
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("DESTINATION_NOT_ACCEPTED", (await response.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
     }
 
     [Fact]
@@ -316,7 +338,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
         var quote = await CreateQuoteAsync(merchant);
         using var created = await SendOrderAsync(
-            merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
+            merchant, quote.QuoteId, Guid.NewGuid().ToString(), wallet: SandboxWalletScreening.HighRiskAddress, reviewer: reviewer);
         var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
         var held = await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
         Assert.Equal("OnHold", held.Status); // merchants never see review, rejection or freezing as such
@@ -415,7 +437,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
         var quote = await CreateQuoteAsync(merchant);
         using var created = await SendOrderAsync(
-            merchant, quote.QuoteId, Guid.NewGuid().ToString(), destinationAddress: SandboxWalletScreening.HighRiskAddress);
+            merchant, quote.QuoteId, Guid.NewGuid().ToString(), wallet: SandboxWalletScreening.HighRiskAddress, reviewer: reviewer);
         var order = (await created.Content.ReadFromJsonAsync<OrderResponse>())!;
         await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
         await PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/reject", new { reason = "Linked to fraud." });
@@ -448,23 +470,40 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         return (await response.Content.ReadFromJsonAsync<OrderResponse>())!;
     }
 
-    private static Task<HttpResponseMessage> SendOrderAsync(
+    /// <summary>Makes <paramref name="wallet"/> the merchant's active Ethereum wallet, then posts the order.</summary>
+    private static async Task<HttpResponseMessage> SendOrderAsync(
         HttpClient client,
         Guid quoteId,
         string? key,
         string customerId = SandboxCustomerDirectory.Verified,
-        string destinationAddress = Address)
+        string wallet = Address,
+        HttpClient? reviewer = null)
     {
+        await UseWalletAsync(client, wallet, reviewer);
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/orders", UriKind.Relative))
         {
-            Content = JsonContent.Create(new { quoteId, customerId, destinationAddress }),
+            Content = JsonContent.Create(new { quoteId, customerId }),
         };
         if (key is not null)
         {
             request.Headers.Add("Idempotency-Key", key);
         }
 
-        return client.SendAsync(request);
+        return await client.SendAsync(request);
+    }
+
+    /// <summary>Registers the wallet (a no-op when it is already active) and, if screening held it, has a reviewer approve it.</summary>
+    private static async Task UseWalletAsync(HttpClient merchant, string address, HttpClient? reviewer)
+    {
+        using var response = await merchant.PostAsJsonAsync(new Uri("/v1/settlement/wallets", UriKind.Relative), new { network = "ethereum", address });
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        var wallet = (await response.Content.ReadFromJsonAsync<SettlementWalletResponse>())!;
+        if (wallet.Status == "UnderReview")
+        {
+            Assert.NotNull(reviewer);
+            await PostAsync<ReviewSettlementWalletResponse>(
+                reviewer, $"/v1/review/settlement-wallets/{wallet.WalletId}/approve", new { reason = "Test wallet, approved for this scenario." });
+        }
     }
 
     private static Task<HttpResponseMessage> PostWebhookAsync(HttpClient client, string body, string signature)

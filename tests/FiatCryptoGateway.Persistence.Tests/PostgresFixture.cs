@@ -50,7 +50,10 @@ public sealed class PostgresFixture : IAsyncLifetime
     /// <summary>A separate gateway instance: its own connection pool and its own sandbox providers.</summary>
     public ServiceProvider BuildServices(TimeProvider time)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        // New settlement wallets are usable at once here; the cooling-off period has its own tests.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Settlement:CoolingOffHours"] = "0" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton(time);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));

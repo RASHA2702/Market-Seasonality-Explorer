@@ -315,3 +315,100 @@ public sealed class SettlementServiceTests
         return services.BuildServiceProvider(validateScopes: true);
     }
 }
+
+/// <summary>Orders pay out only to the merchant's active settlement wallet for the quote's network.</summary>
+public sealed class OrderSettlementTests
+{
+    private const string Tron = "TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYH";
+    private const string TronReplacement = "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW";
+    private static readonly CancellationToken None = CancellationToken.None;
+
+    [Fact]
+    public async Task Order_PaysOutToTheMerchantsActiveWallet()
+    {
+        var time = new ManualTimeProvider(Fixtures.Start);
+        await using var services = BuildServices(time);
+        await services.GetRequiredService<SettlementService>().RegisterAsync(Fixtures.ClientId, "tron", Tron, null, None);
+        time.Advance(TimeSpan.FromHours(24));
+
+        var order = await CreateOrderAsync(services);
+
+        Assert.Equal(Tron, order.DestinationAddress);
+    }
+
+    [Fact]
+    public async Task WithoutAnActiveWallet_OrdersAreRefused_IncludingWhileAWalletCoolsOff()
+    {
+        var time = new ManualTimeProvider(Fixtures.Start);
+        await using var services = BuildServices(time);
+
+        Assert.Equal("NO_SETTLEMENT_WALLET", (await Assert.ThrowsAsync<GatewayRuleException>(() => CreateOrderAsync(services))).Code);
+        await services.GetRequiredService<SettlementService>().RegisterAsync(Fixtures.ClientId, "tron", Tron, null, None);
+        time.Advance(TimeSpan.FromHours(23));
+        Assert.Equal("NO_SETTLEMENT_WALLET", (await Assert.ThrowsAsync<GatewayRuleException>(() => CreateOrderAsync(services))).Code);
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(Tron, (await CreateOrderAsync(services)).DestinationAddress);
+    }
+
+    [Fact]
+    public async Task OrdersSwitchToAReplacementOnlyWhenItTakesOver()
+    {
+        var time = new ManualTimeProvider(Fixtures.Start);
+        await using var services = BuildServices(time);
+        var settlement = services.GetRequiredService<SettlementService>();
+        await settlement.RegisterAsync(Fixtures.ClientId, "tron", Tron, null, None);
+        time.Advance(TimeSpan.FromHours(24));
+        await settlement.RegisterAsync(Fixtures.ClientId, "tron", TronReplacement, null, None);
+
+        Assert.Equal(Tron, (await CreateOrderAsync(services)).DestinationAddress); // the replacement is still cooling off
+        time.Advance(TimeSpan.FromHours(24));
+        Assert.Equal(TronReplacement, (await CreateOrderAsync(services)).DestinationAddress);
+    }
+
+    [Fact]
+    public async Task WalletFlaggedAfterApproval_StopsNewOrders()
+    {
+        var time = new ManualTimeProvider(Fixtures.Start);
+        var screening = new SwitchableScreening();
+        await using var services = BuildServices(time, screening);
+        await services.GetRequiredService<SettlementService>().RegisterAsync(Fixtures.ClientId, "tron", Tron, null, None);
+        time.Advance(TimeSpan.FromHours(24));
+
+        screening.Risk = WalletRisk.Blocked; // the address appears on a sanctions list after it was approved
+
+        var exception = await Assert.ThrowsAsync<GatewayRuleException>(() => CreateOrderAsync(services));
+        Assert.Equal("ORDER_NOT_PERMITTED", exception.Code); // each order screens the wallet again
+    }
+
+    private static async Task<Domain.Orders.PaymentOrder> CreateOrderAsync(ServiceProvider services)
+    {
+        var onRamp = services.GetRequiredService<Application.OnRamp.OnRampService>();
+        var quote = await onRamp.CreateQuoteAsync(Fixtures.ClientId, new Application.OnRamp.CreateQuoteCommand("INR", 10_000m, "USDT@tron"), None);
+        return await onRamp.CreateOrderAsync(Fixtures.ClientId, new Application.OnRamp.CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None);
+    }
+
+    private static ServiceProvider BuildServices(TimeProvider time, IWalletScreening? screening = null)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var services = new ServiceCollection();
+        services.AddSingleton(time);
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddGatewayCore(configuration);
+        services.AddSandboxProviders(configuration);
+        services.AddInMemoryStores();
+        if (screening is not null)
+        {
+            services.AddSingleton(screening);
+        }
+
+        return services.BuildServiceProvider(validateScopes: true);
+    }
+
+    private sealed class SwitchableScreening : IWalletScreening
+    {
+        public WalletRisk Risk { get; set; } = WalletRisk.Low;
+
+        public Task<WalletScreeningResult> ScreenAsync(Domain.Assets.Asset asset, string address, CancellationToken cancellationToken) =>
+            Task.FromResult(new WalletScreeningResult(Risk, "switchable-test-screening", null));
+    }
+}

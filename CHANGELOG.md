@@ -1,5 +1,13 @@
 # Change log
 
+## 2026-11-25 — Orders pay out only to registered wallets
+
+- An order's crypto now goes to the merchant's active settlement wallet for the quote's network. Without one (none
+  registered, or still cooling off or under review) the order is refused with `NO_SETTLEMENT_WALLET`. The order API
+  no longer takes `destinationAddress`; a request that sends one is refused with `DESTINATION_NOT_ACCEPTED`.
+- Each order screens the wallet again, so a wallet flagged after its approval stops receiving payments.
+- This closes a gap from the consumer on-ramp model, where any API caller could name any destination per order.
+
 ## 2026-11-25 — Merchant settlement wallets
 
 - Each merchant registers the wallet it is paid into, one per network (`/v1/settlement/wallets`). Every new wallet

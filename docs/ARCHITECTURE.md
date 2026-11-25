@@ -169,6 +169,9 @@ check, and changed under a per-merchant lock on every instance.
   withdrawal is kept in an append-only history with who acted and why. Reviewer decisions require a reason.
 - **What merchants see.** Neutral statuses only (`CoolingOff`, `UnderReview`, `Active`, `Replaced`,
   `NotAccepted`, `Disabled`); the screening result is for reviewers.
+- **Orders.** An order takes its destination from the merchant's active wallet for the quote's network and records
+  it on the order; an API request cannot name a destination. The order's compliance screening checks that wallet
+  again, before payment and after it, so a wallet flagged since its approval stops receiving payments.
 
 ## Reconciliation
 

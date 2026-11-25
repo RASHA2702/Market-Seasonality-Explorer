@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Compliance;
@@ -15,7 +16,8 @@ namespace FiatCryptoGateway.Application.OnRamp;
 
 public sealed record CreateQuoteCommand(string SourceCurrency, decimal SourceAmount, string DestinationAsset);
 
-public sealed record CreateOrderCommand(Guid QuoteId, string CustomerId, string DestinationAddress);
+/// <summary>An order for one of the merchant's customers. The crypto goes to the merchant's active settlement wallet.</summary>
+public sealed record CreateOrderCommand(Guid QuoteId, string CustomerId);
 
 /// <summary>Providers the on-ramp flow depends on, grouped to keep the service's constructor readable.</summary>
 public sealed record OnRampProviders(
@@ -38,6 +40,7 @@ public sealed partial class OnRampService(
     OnRampProviders providers,
     OnRampStores stores,
     ComplianceScreeningService compliance,
+    SettlementService settlement,
     IOrderLocks locks,
     IOptions<PricingOptions> pricing,
     TimeProvider time,
@@ -98,11 +101,18 @@ public sealed partial class OnRampService(
             throw new GatewayRuleException("QUOTE_EXPIRED", "The quote has expired; request a new one.");
         }
 
+        // Payments go only to a wallet the merchant registered, that was screened and has finished its cooling-off
+        // period. The wallet is screened again below, so one flagged since its approval is caught.
         var destination = quote.DestinationAmount.Asset;
-        if (string.IsNullOrWhiteSpace(command.DestinationAddress) || !providers.Custody.IsValidAddress(destination, command.DestinationAddress))
+        var network = destination.Id.Network ?? throw new GatewayRuleException("UNSUPPORTED_ASSET", $"{destination.Id} is not on a network.");
+        var wallet = await settlement.CurrentAsync(clientId, network, cancellationToken);
+        if (wallet is null || !providers.Custody.IsValidAddress(destination, wallet.Address))
         {
-            throw new GatewayRuleException("INVALID_DESTINATION_ADDRESS", $"Not a valid {destination.Id} address.");
+            throw new GatewayRuleException(
+                "NO_SETTLEMENT_WALLET", $"There is no active {network} settlement wallet. Register one and wait until it is active.");
         }
+
+        var destinationAddress = wallet.Address;
 
         // One order at a time per customer, so two simultaneous orders cannot both fit under a limit.
         await using var customerLock = await locks.AcquireAsync(OrderLockKeys.Customer(clientId, command.CustomerId), cancellationToken);
@@ -111,7 +121,7 @@ public sealed partial class OnRampService(
         // that could not be completed. Screening runs again after payment.
         var orderId = Guid.NewGuid();
         var precheck = await compliance.ScreenAsync(
-            orderId, clientId, command.CustomerId, destination, command.DestinationAddress, quote.PivotAmount, cancellationToken);
+            orderId, clientId, command.CustomerId, destination, destinationAddress, quote.PivotAmount, cancellationToken);
         if (precheck.Outcome == ComplianceOutcome.Rejected)
         {
             if (precheck.Reasons.Contains("CUSTOMER_NOT_FOUND"))
@@ -129,7 +139,7 @@ public sealed partial class OnRampService(
         }
 
         var policy = pricing.Value.ToPolicy(catalog);
-        var order = PaymentOrder.Create(orderId, clientId, command.CustomerId, quote, command.DestinationAddress, now, policy.PaymentWindow);
+        var order = PaymentOrder.Create(orderId, clientId, command.CustomerId, quote, destinationAddress, now, policy.PaymentWindow);
         order.RecordPrePaymentScreening(precheck);
         var session = await providers.Fiat.CreateSessionAsync(order, cancellationToken);
         order.AttachPaymentSession(session.SessionId, session.CheckoutUrl);

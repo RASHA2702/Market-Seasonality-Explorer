@@ -2,6 +2,7 @@ using FiatCryptoGateway.Application;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
@@ -26,7 +27,10 @@ public sealed class OnRampServiceTests : IDisposable
 
     public OnRampServiceTests()
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        // New settlement wallets are usable at once here; the cooling-off period has its own tests.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Settlement:CoolingOffHours"] = "0" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(_time);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
@@ -90,19 +94,19 @@ public sealed class OnRampServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData(SandboxCustomerDirectory.Unverified, Address, "KYC_REQUIRED")]
-    [InlineData(SandboxCustomerDirectory.BlockedCountry, Address, "COUNTRY_NOT_SUPPORTED")]
-    [InlineData(SandboxCustomerDirectory.Foreign, Address, "COUNTRY_NOT_SUPPORTED")]
-    [InlineData(SandboxCustomerDirectory.SanctionsMatch, Address, "ORDER_NOT_PERMITTED")]
-    [InlineData(SandboxCustomerDirectory.Verified, SandboxWalletScreening.BlockedAddress, "ORDER_NOT_PERMITTED")]
-    public async Task IneligibleOrders_AreRefusedBeforeAnyPayment(string customer, string address, string code)
+    [InlineData(SandboxCustomerDirectory.Unverified, "KYC_REQUIRED")]
+    [InlineData(SandboxCustomerDirectory.BlockedCountry, "COUNTRY_NOT_SUPPORTED")]
+    [InlineData(SandboxCustomerDirectory.Foreign, "COUNTRY_NOT_SUPPORTED")]
+    [InlineData(SandboxCustomerDirectory.SanctionsMatch, "ORDER_NOT_PERMITTED")]
+    public async Task IneligibleOrders_AreRefusedBeforeAnyPayment(string customer, string code)
     {
+        await UseWalletAsync(Address);
         var quote = await QuoteAsync(10_000m);
 
         var exception = await Assert.ThrowsAsync<GatewayRuleException>(() =>
-            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, customer, address), None));
+            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, customer), None));
 
-        // Sanctions and wallet findings surface only as ORDER_NOT_PERMITTED, so a suspect is not tipped off.
+        // Sanctions findings surface only as ORDER_NOT_PERMITTED, so a suspect is not tipped off.
         Assert.Equal(code, exception.Code);
     }
 
@@ -222,11 +226,12 @@ public sealed class OnRampServiceTests : IDisposable
     [Fact]
     public async Task Quote_CanBeUsedForOneOrderOnly()
     {
+        await UseWalletAsync(Address);
         var quote = await QuoteAsync(10_000m);
-        await OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None);
+        await OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None);
 
         var exception = await Assert.ThrowsAsync<GatewayRuleException>(() =>
-            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None));
+            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None));
 
         Assert.Equal("QUOTE_ALREADY_USED", exception.Code);
     }
@@ -234,11 +239,12 @@ public sealed class OnRampServiceTests : IDisposable
     [Fact]
     public async Task ExpiredQuote_IsRefused()
     {
+        await UseWalletAsync(Address);
         var quote = await QuoteAsync(10_000m);
         _time.Advance(TimeSpan.FromSeconds(61));
 
         var exception = await Assert.ThrowsAsync<GatewayRuleException>(() =>
-            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None));
+            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None));
 
         Assert.Equal("QUOTE_EXPIRED", exception.Code);
     }
@@ -250,21 +256,20 @@ public sealed class OnRampServiceTests : IDisposable
         var quote = await QuoteAsync(10_000m);
 
         await Assert.ThrowsAsync<ResourceNotFoundException>(() =>
-            OnRamp.CreateOrderAsync("client-b", new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None));
+            OnRamp.CreateOrderAsync("client-b", new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None));
         await Assert.ThrowsAsync<ResourceNotFoundException>(() => OnRamp.GetOrderAsync("client-b", order.OrderId, None));
     }
 
-    [Theory]
-    [InlineData("0x123")]
-    [InlineData("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")]
-    public async Task AddressThatIsNotValidForTheNetwork_IsRefused(string address)
+    [Fact]
+    public async Task WalletOnAnotherNetwork_DoesNotReceiveTheOrder()
     {
-        var quote = await QuoteAsync(10_000m);
+        await UseWalletAsync(Address, "polygon");
+        var quote = await QuoteAsync(10_000m); // USDC on Ethereum
 
         var exception = await Assert.ThrowsAsync<GatewayRuleException>(() =>
-            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, address), None));
+            OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None));
 
-        Assert.Equal("INVALID_DESTINATION_ADDRESS", exception.Code);
+        Assert.Equal("NO_SETTLEMENT_WALLET", exception.Code);
     }
 
     [Fact]
@@ -294,7 +299,8 @@ public sealed class OnRampServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("EUR", "100.00", "BTC@bitcoin", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")]
+    [InlineData("EUR", "100.00", "USDT@tron", "TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYH")]
+    [InlineData("GBP", "50.00", "USDC@polygon", Address)]
     [InlineData("JPY", "50000", "SOL@solana", "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV")]
     [InlineData("KWD", "100.000", "ETH@ethereum", Address)]
     public async Task OtherCurrenciesAndNetworks_CompleteEndToEnd(string currency, string amount, string asset, string address)
@@ -324,6 +330,7 @@ public sealed class OnRampServiceTests : IDisposable
     private Task<Domain.Pricing.Quote> QuoteAsync(decimal amount, string currency = "INR", string asset = "USDC@ethereum") =>
         OnRamp.CreateQuoteAsync(Client, new CreateQuoteCommand(currency, amount, asset), None);
 
+    /// <summary>Creates an order paying out to <paramref name="address"/>, made the merchant's active wallet first.</summary>
     private async Task<PaymentOrder> CreateOrderAsync(
         decimal amount,
         string currency = "INR",
@@ -331,8 +338,22 @@ public sealed class OnRampServiceTests : IDisposable
         string address = Address,
         string customer = SandboxCustomerDirectory.Verified)
     {
+        await UseWalletAsync(address, AssetId.Parse(asset).Network!);
         var quote = await QuoteAsync(amount, currency, asset);
-        return await OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, customer, address), None);
+        return await OnRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, customer), None);
+    }
+
+    /// <summary>Makes <paramref name="address"/> the merchant's active wallet, approving it if screening held it.</summary>
+    private async Task UseWalletAsync(string address, string network = "ethereum")
+    {
+        var settlement = _services.GetRequiredService<SettlementService>();
+        var (wallet, _) = await settlement.RegisterAsync(Client, network, address, null, None);
+        if (wallet.Status == Domain.Settlement.SettlementWalletStatus.UnderReview)
+        {
+            await settlement.ApproveAsync(wallet.WalletId, "officer", "Test wallet, approved for this scenario.", None);
+        }
+
+        Assert.Equal(address, (await settlement.CurrentAsync(Client, network, None))!.Address);
     }
 
     private Task<WebhookResult> PayAsync(PaymentOrder order, Money? amount = null)

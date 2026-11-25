@@ -16,7 +16,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Currencies | All 156 circulating ISO 4217 currencies with official minor units (JPY 0 decimals, USD 2, KWD 3). Sandbox prices exist for 14 of them; the rest need a real FX source. |
 | Crypto assets | Identified by symbol **and** network (USDC on Ethereum ≠ USDC on Solana). Sandbox: the stablecoins chosen for launch (USDT on Tron; USDT and USDC on Polygon, Ethereum and Solana), each network's native coin (TRX, POL, ETH, SOL), and BTC. |
 | Quotes | Price route with freshness and no-look-ahead checks, service fee (rounded up), spread, network fee, crypto rounded down, min/max limits, 60-second expiry. |
-| Orders | Explicit state machine: fiat captured → compliance → buy → send → confirmations. Late or wrong-amount payments are refunded, never converted. |
+| Orders | Paid out only to the merchant's active settlement wallet for the quote's network, which is screened again on every order. Explicit state machine: fiat captured → compliance → buy → send → confirmations. Late or wrong-amount payments are refunded, never converted. |
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
@@ -24,7 +24,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 282 .NET tests (18 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 286 .NET tests (18 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -42,13 +42,21 @@ Prerequisites: .NET SDK 10.
    export Gateway__ApiKeys__Clients__0__KeySha256=$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)
    ```
 
-2. Start the API (in the same shell):
+2. Start the API (in the same shell). For local testing, new settlement wallets are made usable at once instead
+   of after the usual 24-hour cooling-off period:
 
    ```bash
-   ASPNETCORE_URLS=http://127.0.0.1:5080 dotnet run --project src/FiatCryptoGateway.Api
+   Gateway__Settlement__CoolingOffHours=0 ASPNETCORE_URLS=http://127.0.0.1:5080 dotnet run --project src/FiatCryptoGateway.Api
    ```
 
-3. In a second shell (set `key` to the same value), walk an order through:
+3. In a second shell (set `key` to the same value), register the wallet you are paid into, then walk an order
+   through:
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:5080/v1/settlement/wallets \
+     -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
+     -d '{"network":"ethereum","address":"0x1111111111111111111111111111111111111111"}'
+   ```
 
    ```bash
    curl -s -X POST http://127.0.0.1:5080/v1/quotes \
@@ -60,7 +68,7 @@ Prerequisites: .NET SDK 10.
    curl -s -X POST http://127.0.0.1:5080/v1/orders \
      -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
      -H "Idempotency-Key: $(uuidgen)" \
-     -d '{"quoteId":"<quoteId from above>","customerId":"cust_verified","destinationAddress":"0x1111111111111111111111111111111111111111"}'
+     -d '{"quoteId":"<quoteId from above>","customerId":"cust_verified"}'
    ```
 
    ```bash
@@ -182,7 +190,10 @@ Every new wallet is screened. The merchant sees one of these statuses, never the
 | `Replaced` | A newer wallet for the network took over when it became usable. Until then this one stayed active. |
 | `NotAccepted`, `Disabled` | Declined by a reviewer, or withdrawn by the merchant (`POST /v1/settlement/wallets/{id}/disable`) or a reviewer. |
 
-Only one change per network can be waiting at a time. Reviewers see waiting wallets with their screening at
+Orders pay out only to the merchant's `Active` wallet for the quote's network; without one, an order is refused
+with `NO_SETTLEMENT_WALLET`, and an order request that names its own `destinationAddress` is refused with
+`DESTINATION_NOT_ACCEPTED`. Each order screens the wallet again, so one flagged after its approval stops receiving
+payments. Only one change per network can be waiting at a time. Reviewers see waiting wallets with their screening at
 `GET /v1/review/settlement-wallets` and decide with `/approve`, `/reject` or `/disable`, each with a `reason`.
 Settings are under `Gateway:Settlement`: `CoolingOffHours` (24) and `Networks` (`tron,polygon,ethereum,solana`).
 For local testing, `Gateway__Settlement__CoolingOffHours=0` makes clean wallets usable at once.
@@ -224,7 +235,7 @@ records are kept in memory: after a restart with PostgreSQL storage, payments fr
 | `GET /health`, `GET /v1/environment` | Liveness; confirms `Sandbox` and `realFundsMovement: false`. No key needed. |
 | `GET /v1/assets` | Supported currencies and crypto assets. |
 | `POST /v1/quotes` | Price a fiat amount into a crypto asset. |
-| `POST /v1/orders` | Accept a quote. Requires an `Idempotency-Key` header. |
+| `POST /v1/orders` | Accept a quote (`quoteId`, `customerId`). Pays out to the merchant's active settlement wallet for the quote's network. Requires an `Idempotency-Key` header. |
 | `GET /v1/orders/{id}`, `GET /v1/orders/{id}/ledger` | Order status and history; its journal entries. |
 | `POST /v1/webhooks/sandbox-fiat` | Payment-provider webhook (signature-verified, no API key). |
 | `POST /v1/sandbox/orders/{id}/pay`, `/confirm` | Simulate the customer's payment and on-chain confirmations. |

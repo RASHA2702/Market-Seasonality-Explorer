@@ -44,19 +44,21 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
     {
         var time = new ManualTimeProvider(Start);
         await using var first = fixture.BuildServices(time);
+        var merchant = await MerchantWithWalletAsync(first);
         var onRamp = first.GetRequiredService<OnRampService>();
-        var quote = await onRamp.CreateQuoteAsync(Client, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
-        var order = await onRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, Address), None);
+        var quote = await onRamp.CreateQuoteAsync(merchant, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
+        var order = await onRamp.CreateOrderAsync(merchant, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None);
+        Assert.Equal(Address, order.DestinationAddress);
 
         var webhooks = first.GetRequiredService<SandboxFiatWebhookHandler>();
         var (body, signature) = webhooks.CreateSignedPaymentEvent(order);
         Assert.Equal(WebhookResult.Accepted, await webhooks.HandleAsync(body, signature, None));
-        var sent = await onRamp.GetOrderAsync(Client, order.OrderId, None);
-        await onRamp.RecordConfirmationsAsync(Client, order.OrderId, sent.Transfer!.TransactionHash, 12, None);
+        var sent = await onRamp.GetOrderAsync(merchant, order.OrderId, None);
+        await onRamp.RecordConfirmationsAsync(merchant, order.OrderId, sent.Transfer!.TransactionHash, 12, None);
 
         // A second instance shares nothing with the first except the database.
         await using var second = fixture.BuildServices(time);
-        var reloaded = await second.GetRequiredService<OnRampService>().GetOrderAsync(Client, order.OrderId, None);
+        var reloaded = await second.GetRequiredService<OnRampService>().GetOrderAsync(merchant, order.OrderId, None);
 
         Assert.Equal(OrderStatus.Completed, reloaded.Status);
         Assert.Equal(
@@ -212,15 +214,16 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         var time = new ManualTimeProvider(Start);
         await using var instanceA = fixture.BuildServices(time);
         await using var instanceB = fixture.BuildServices(time);
+        var merchant = await MerchantWithWalletAsync(instanceA);
 
         // Basic KYC allows 2,000 USD per day: three 900 USD orders arrive at once on two instances.
         var results = await Task.WhenAll(new[] { instanceA, instanceB, instanceA }.Select(async services =>
         {
             var onRamp = services.GetRequiredService<OnRampService>();
-            var quote = await onRamp.CreateQuoteAsync(Client, new CreateQuoteCommand("USD", 900m, "USDC@ethereum"), None);
+            var quote = await onRamp.CreateQuoteAsync(merchant, new CreateQuoteCommand("USD", 900m, "USDC@ethereum"), None);
             try
             {
-                await onRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.BasicKyc, Address), None);
+                await onRamp.CreateOrderAsync(merchant, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.BasicKyc), None);
                 return true;
             }
             catch (FiatCryptoGateway.Domain.GatewayRuleException exception) when (exception.Code == "DAILY_LIMIT_EXCEEDED")
@@ -530,11 +533,30 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         return clientId;
     }
 
+    /// <summary>An order for a merchant of its own, paid out to <paramref name="address"/>.</summary>
     private static async Task<PaymentOrder> CreateOrderAsync(ServiceProvider services, string address = Address)
     {
+        var merchant = await MerchantWithWalletAsync(services, address);
         var onRamp = services.GetRequiredService<OnRampService>();
-        var quote = await onRamp.CreateQuoteAsync(Client, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
-        return await onRamp.CreateOrderAsync(Client, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified, address), None);
+        var quote = await onRamp.CreateQuoteAsync(merchant, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
+        return await onRamp.CreateOrderAsync(merchant, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None);
+    }
+
+    /// <summary>
+    /// A merchant no other test uses, with <paramref name="address"/> as its active Ethereum wallet (approved if
+    /// screening held it). Tests run on different clocks, so they must not share a merchant's settlement wallets.
+    /// </summary>
+    private static async Task<string> MerchantWithWalletAsync(ServiceProvider services, string address = Address)
+    {
+        var merchant = await AddMerchantAsync(services);
+        var settlement = services.GetRequiredService<SettlementService>();
+        var (wallet, _) = await settlement.RegisterAsync(merchant, "ethereum", address, null, None);
+        if (wallet.Status == SettlementWalletStatus.UnderReview)
+        {
+            await settlement.ApproveAsync(wallet.WalletId, "officer", "Test wallet, approved for this scenario.", None);
+        }
+
+        return merchant;
     }
 
     /// <summary>Every file in db/migrations, by version, so a new migration needs no test change.</summary>
