@@ -53,6 +53,11 @@ public static class GatewayServiceCollectionExtensions
             provider.GetRequiredService<Ports.ILedgerStore>()));
         services.AddSingleton<OnRampService>();
         services.AddSingleton<ComplianceReviewService>();
+        services.AddSingleton<IValidateOptions<Settlement.SettlementOptions>, Settlement.SettlementOptionsValidator>();
+        services.AddOptions<Settlement.SettlementOptions>()
+            .Bind(configuration.GetSection(Settlement.SettlementOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<Settlement.SettlementService>();
         services.AddSingleton<IValidateOptions<Reconciliation.ReconciliationOptions>, Reconciliation.ReconciliationOptionsValidator>();
         services.AddOptions<Reconciliation.ReconciliationOptions>()
             .Bind(configuration.GetSection(Reconciliation.ReconciliationOptions.SectionName))

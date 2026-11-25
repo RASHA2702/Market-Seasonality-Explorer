@@ -150,6 +150,26 @@ Merchants are told about every status change they may see, through the transacti
   URLs. Before merchants can register their own URLs, outbound requests must also refuse private and
   internal addresses (server-side request forgery).
 
+## Settlement wallets
+
+Each merchant's settlement settings are one unit (`MerchantSettlement`), loaded and saved together with a version
+check, and changed under a per-merchant lock on every instance.
+
+- **Screening.** A wallet is screened when it is registered. A clean wallet is approved but can receive payments
+  only from `UsableFrom`, the end of a cooling-off period (24 hours by default), so a merchant can disable a wallet
+  added without its knowledge, for example with a stolen API key. Any other result, including a screening outage,
+  sends the wallet to a reviewer. A blocked (sanctioned) wallet can only be rejected; the database refuses an
+  approved blocked wallet too.
+- **One wallet per network.** At most one wallet per network is in use, and at most one change per network can be
+  waiting. A replacement takes over the moment it becomes usable: the old wallet's `RetiredAt` is set to that
+  moment, so there is never a gap or an overlap. If the replacement is withdrawn before it takes over, the old
+  wallet simply stays in use; if it is withdrawn after, the network has no wallet until a new one is usable.
+- **Evidence.** A wallet's address, network, label and screening never change once stored (a database trigger
+  refuses it), a closed wallet stays closed, wallets are never deleted, and every registration, decision and
+  withdrawal is kept in an append-only history with who acted and why. Reviewer decisions require a reason.
+- **What merchants see.** Neutral statuses only (`CoolingOff`, `UnderReview`, `Active`, `Replaced`,
+  `NotAccepted`, `Disabled`); the screening result is for reviewers.
+
 ## Reconciliation
 
 - **What is compared.** Each journal entry that records a provider movement carries the provider's own
@@ -203,5 +223,7 @@ The schema enforces in the database what the domain enforces in code:
 - Off-ramp (crypto → fiat) and merchant checkout flows.
 - Any real provider adapter, real KYC, real prices.
 - Admin and reviewer UI, Travel Rule data exchange.
+- Settlement to a merchant's bank account (flow 3), and proof that a merchant controls a registered wallet
+  (for example by signing a message), if the partner or the law requires it.
 - Reconciling provider payouts to the company's bank account.
 - Merchants registering their own webhook URLs (needs the private-address protection above).

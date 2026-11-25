@@ -4,6 +4,7 @@ using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Domain.Pricing;
+using FiatCryptoGateway.Domain.Settlement;
 
 namespace FiatCryptoGateway.Application.Ports;
 
@@ -224,6 +225,39 @@ public interface ILedgerStore
         DateTimeOffset windowEnd,
         IReadOnlyCollection<string> references,
         CancellationToken cancellationToken);
+}
+
+/// <summary>Merchants' settlement wallets. Each merchant's settings are loaded and saved as one unit.</summary>
+public interface ISettlementStore
+{
+    /// <summary>The merchant's settings; empty (version 0) if it has none yet.</summary>
+    Task<MerchantSettlement> GetAsync(string clientId, CancellationToken cancellationToken);
+
+    /// <summary>Saves every change in one transaction. Throws <see cref="SettlementConcurrencyException"/> if the settings changed since they were loaded.</summary>
+    Task SaveAsync(MerchantSettlement settlement, CancellationToken cancellationToken);
+
+    Task<string?> FindOwnerAsync(Guid walletId, CancellationToken cancellationToken);
+
+    /// <summary>Wallets waiting for a reviewer, longest-waiting first.</summary>
+    Task<IReadOnlyList<SettlementWallet>> ListUnderReviewAsync(CancellationToken cancellationToken);
+}
+
+public sealed class SettlementConcurrencyException : Exception
+{
+    public SettlementConcurrencyException()
+        : this("The merchant's settlement settings were changed by another process.")
+    {
+    }
+
+    public SettlementConcurrencyException(string message)
+        : base(message)
+    {
+    }
+
+    public SettlementConcurrencyException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }
 
 /// <summary>A provider's daily settlement report: what it says it collected, refunded or delivered.</summary>

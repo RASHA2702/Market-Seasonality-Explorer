@@ -5,5 +5,6 @@
   <ItemGroup>
     <!-- Lets the database adapter rebuild quotes and orders without making that public. -->
     <InternalsVisibleTo Include="FiatCryptoGateway.Persistence.Postgres" />
+    <InternalsVisibleTo Include="FiatCryptoGateway.Sandbox" />
   </ItemGroup>
 </Project>

@@ -43,6 +43,10 @@ public static class OrderLockKeys
     public static Guid Customer(string clientId, string customerId) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes($"customer\n{clientId}\n{customerId}")).AsSpan(0, 16));
 
+    /// <summary>One change to a merchant's settlement settings at a time, on every instance.</summary>
+    public static Guid Settlement(string clientId) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes($"settlement\n{clientId}")).AsSpan(0, 16));
+
     /// <summary>One reconciliation of a provider's day at a time, on every instance.</summary>
     public static Guid Reconciliation(string provider, DateOnly day) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes($"reconciliation\n{provider}\n{day:yyyy-MM-dd}")).AsSpan(0, 16));

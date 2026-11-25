@@ -43,7 +43,7 @@ Flows, in the build order from question 1:
 
 Other changes:
 
-- **Merchant settlement settings**: each merchant registers where it is paid: a wallet per network (screened
+- **Merchant settlement settings** (wallets built; bank accounts later): each merchant registers where it is paid: a wallet per network (screened
   when registered) or, for flow 3, a bank account. Payments go there, never to the gateway.
 - **Ledger**: the gateway's books mirror what the partner reports (amounts collected, delivered, fees), in
   partner-clearing accounts, with no company wallet accounts. The daily reconciliation (built) compares the two.

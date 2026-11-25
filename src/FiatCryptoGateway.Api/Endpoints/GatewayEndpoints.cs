@@ -11,10 +11,12 @@ using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
+using FiatCryptoGateway.Domain.Settlement;
 using FiatCryptoGateway.Sandbox;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Options;
@@ -41,6 +43,9 @@ public static class GatewayEndpoints
         api.MapPost("/orders", CreateOrder);
         api.MapGet("/orders/{orderId:guid}", GetOrder);
         api.MapGet("/orders/{orderId:guid}/ledger", GetOrderLedger);
+        api.MapGet("/settlement/wallets", ListSettlementWallets);
+        api.MapPost("/settlement/wallets", RegisterSettlementWallet);
+        api.MapPost("/settlement/wallets/{walletId:guid}/disable", DisableSettlementWallet);
 
         // Simulations that stand in for the outside world while no real provider is connected.
         var sandbox = app.MapGroup("/v1/sandbox").RequireAuthorization(ApiPolicies.Merchant).AddEndpointFilter<GatewayErrorFilter>();
@@ -61,6 +66,14 @@ public static class GatewayEndpoints
             Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, ct));
         review.MapGet("/orders/{orderId:guid}/webhooks", GetWebhookDeliveries);
         review.MapGet("/ledger/balances", GetLedgerBalances);
+        review.MapGet("/settlement-wallets", ListSettlementWalletsForReview);
+        review.MapGet("/settlement-wallets/{walletId:guid}", GetSettlementWalletForReview);
+        review.MapPost("/settlement-wallets/{walletId:guid}/approve", (Guid walletId, ReasonRequest? request, ClaimsPrincipal user, SettlementService settlement, TimeProvider time, CancellationToken ct) =>
+            ReviewWallet(settlement.ApproveAsync(walletId, user.GetClientId(), request?.Reason, ct), time));
+        review.MapPost("/settlement-wallets/{walletId:guid}/reject", (Guid walletId, ReasonRequest? request, ClaimsPrincipal user, SettlementService settlement, TimeProvider time, CancellationToken ct) =>
+            ReviewWallet(settlement.RejectAsync(walletId, user.GetClientId(), request?.Reason, ct), time));
+        review.MapPost("/settlement-wallets/{walletId:guid}/disable", (Guid walletId, ReasonRequest? request, ClaimsPrincipal user, SettlementService settlement, TimeProvider time, CancellationToken ct) =>
+            ReviewWallet(settlement.DisableByReviewerAsync(walletId, user.GetClientId(), request?.Reason, ct), time));
         review.MapGet("/reconciliation/runs", ListReconciliationRuns);
         review.MapPost("/reconciliation/runs", RunReconciliation);
         return app;
@@ -304,6 +317,56 @@ public static class GatewayEndpoints
         await reviews.GetOrderAsync(orderId, cancellationToken); // 404 for an unknown order
         return (await outbox.ListForOrderAsync(orderId, cancellationToken)).Select(WebhookDeliveryResponse.From);
     }
+
+    private static async Task<IEnumerable<SettlementWalletResponse>> ListSettlementWallets(
+        ClaimsPrincipal user,
+        SettlementService settlement,
+        TimeProvider time,
+        CancellationToken cancellationToken)
+    {
+        var now = time.GetUtcNow();
+        return (await settlement.ListAsync(user.GetClientId(), cancellationToken)).Select(wallet => SettlementWalletResponse.From(wallet, now));
+    }
+
+    /// <summary>Registers a wallet: 201 when new, 200 when the same wallet was already registered and is in use or waiting.</summary>
+    private static async Task<IResult> RegisterSettlementWallet(
+        RegisterWalletRequest? request,
+        ClaimsPrincipal user,
+        SettlementService settlement,
+        TimeProvider time,
+        CancellationToken cancellationToken)
+    {
+        var (wallet, created) = await settlement.RegisterAsync(user.GetClientId(), request?.Network, request?.Address, request?.Label, cancellationToken);
+        var response = SettlementWalletResponse.From(wallet, time.GetUtcNow());
+        return created ? Results.Json(response, statusCode: StatusCodes.Status201Created) : Results.Ok(response);
+    }
+
+    private static async Task<SettlementWalletResponse> DisableSettlementWallet(
+        Guid walletId,
+        ClaimsPrincipal user,
+        SettlementService settlement,
+        TimeProvider time,
+        CancellationToken cancellationToken) =>
+        SettlementWalletResponse.From(await settlement.DisableByMerchantAsync(user.GetClientId(), walletId, cancellationToken), time.GetUtcNow());
+
+    private static async Task<IEnumerable<ReviewSettlementWalletResponse>> ListSettlementWalletsForReview(
+        SettlementService settlement,
+        TimeProvider time,
+        CancellationToken cancellationToken)
+    {
+        var now = time.GetUtcNow();
+        return (await settlement.ListForReviewAsync(cancellationToken)).Select(wallet => ReviewSettlementWalletResponse.From(wallet, now));
+    }
+
+    private static async Task<ReviewSettlementWalletResponse> GetSettlementWalletForReview(
+        Guid walletId,
+        SettlementService settlement,
+        TimeProvider time,
+        CancellationToken cancellationToken) =>
+        ReviewSettlementWalletResponse.From(await settlement.GetForReviewAsync(walletId, cancellationToken), time.GetUtcNow());
+
+    private static async Task<ReviewSettlementWalletResponse> ReviewWallet(Task<SettlementWallet> decision, TimeProvider time) =>
+        ReviewSettlementWalletResponse.From(await decision, time.GetUtcNow());
 
     /// <summary>Recorded runs, newest first; only one day's when <paramref name="day"/> (yyyy-MM-dd) is given.</summary>
     private static async Task<IEnumerable<ReconciliationRunResponse>> ListReconciliationRuns(

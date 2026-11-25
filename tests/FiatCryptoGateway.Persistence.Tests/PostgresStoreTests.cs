@@ -1,9 +1,14 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
+using FiatCryptoGateway.Application.Settlement;
+using FiatCryptoGateway.Domain.Compliance;
+using FiatCryptoGateway.Domain.Settlement;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
@@ -446,6 +451,83 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         Assert.Equal([paymentId], (await ledger.ListForReconciliationAsync("sandbox-fiat", farAway, farAway.AddDays(1), [paymentId], None)).Select(e => e.External!.Id));
         Assert.Empty(await ledger.ListForReconciliationAsync("sandbox-fiat", farAway, farAway.AddDays(1), [], None));
         Assert.Empty(await ledger.ListForReconciliationAsync("another-provider", run.WindowStart, run.WindowEnd, [paymentId], None));
+    }
+
+    [Fact]
+    public async Task SettlementWallets_AreStoredWithTheirHistory()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var first = fixture.BuildServices(time);
+        var merchant = await AddMerchantAsync(first);
+        var settlement = first.GetRequiredService<SettlementService>();
+        var (clean, _) = await settlement.RegisterAsync(merchant, "polygon", Address, "Main", None);
+        var (risky, _) = await settlement.RegisterAsync(merchant, "ethereum", SandboxWalletScreening.HighRiskAddress, null, None);
+        await settlement.ApproveAsync(risky.WalletId, "officer", "Verified with the merchant.", None);
+        time.Advance(TimeSpan.FromHours(30));
+        var (replacement, _) = await settlement.RegisterAsync(merchant, "polygon", "0x3333333333333333333333333333333333333333", null, None);
+
+        // Another instance shares nothing with the first except the database.
+        await using var second = fixture.BuildServices(time);
+        var reloaded = await second.GetRequiredService<ISettlementStore>().GetAsync(merchant, None);
+
+        Assert.Equal(4, reloaded.Version); // two registrations, an approval, a replacement
+        Assert.Equal([clean.WalletId, risky.WalletId, replacement.WalletId], reloaded.Wallets.Select(wallet => wallet.WalletId));
+        var storedClean = reloaded.Find(clean.WalletId)!;
+        Assert.Equal(("polygon", Address, "Main", WalletRisk.Low), (storedClean.Network, storedClean.Address, storedClean.Label, storedClean.Screening.Risk));
+        Assert.Equal(replacement.UsableFrom, storedClean.RetiredAt); // scheduled to hand over
+        Assert.Equal(
+            [(SettlementWalletActionKind.Registered, merchant, (string?)null), (SettlementWalletActionKind.Approved, "officer", "Verified with the merchant.")],
+            reloaded.Find(risky.WalletId)!.History.Select(action => (action.Kind, action.Actor, action.Reason)));
+        Assert.Equal(risky.WalletId, (await second.GetRequiredService<SettlementService>().CurrentAsync(merchant, "ethereum", None))!.WalletId);
+        Assert.Equal(merchant, await second.GetRequiredService<ISettlementStore>().FindOwnerAsync(risky.WalletId, None));
+    }
+
+    [Fact]
+    public async Task StaleSettlementCopy_CannotOverwriteANewerChange()
+    {
+        await using var services = fixture.BuildServices(new ManualTimeProvider(Start));
+        var merchant = await AddMerchantAsync(services);
+        var store = services.GetRequiredService<ISettlementStore>();
+        var clean = new WalletScreeningResult(WalletRisk.Low, "test", null);
+        var first = await store.GetAsync(merchant, None);
+        var second = await store.GetAsync(merchant, None);
+        first.Register(Guid.NewGuid(), "polygon", Address, null, clean, merchant, Start, TimeSpan.Zero, out _);
+        await store.SaveAsync(first, None);
+
+        second.Register(Guid.NewGuid(), "tron", "TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYH", null, clean, merchant, Start, TimeSpan.Zero, out _);
+
+        await Assert.ThrowsAsync<SettlementConcurrencyException>(() => store.SaveAsync(second, None));
+        Assert.Single((await store.GetAsync(merchant, None)).Wallets);
+    }
+
+    [Fact]
+    public async Task UnderReviewWallets_AreListedLongestWaitingFirst()
+    {
+        var time = new ManualTimeProvider(Start);
+        await using var services = fixture.BuildServices(time);
+        var merchant = await AddMerchantAsync(services);
+        var settlement = services.GetRequiredService<SettlementService>();
+        var (older, _) = await settlement.RegisterAsync(merchant, "ethereum", SandboxWalletScreening.HighRiskAddress, null, None);
+        time.Advance(TimeSpan.FromMinutes(5));
+        var (newer, _) = await settlement.RegisterAsync(merchant, "polygon", SandboxWalletScreening.OutageAddress, null, None);
+
+        var queue = (await settlement.ListForReviewAsync(None)).Where(wallet => wallet.ClientId == merchant).ToList();
+
+        Assert.Equal([older.WalletId, newer.WalletId], queue.Select(wallet => wallet.WalletId));
+        Assert.Equal(("screening-unavailable", WalletRisk.Unknown), (queue[1].Screening.Screener, queue[1].Screening.Risk));
+    }
+
+    /// <summary>A merchant no other test uses, so settlement state never leaks between tests.</summary>
+    private static async Task<string> AddMerchantAsync(ServiceProvider services)
+    {
+        var clientId = $"merchant-{Guid.NewGuid():N}";
+        await using var connection = await services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "INSERT INTO gateway.api_client (client_id, display_name, key_sha256, role) VALUES (@id, @id, @hash, 'MERCHANT')", connection);
+        command.Parameters.AddWithValue("id", clientId);
+        command.Parameters.AddWithValue("hash", Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(clientId))));
+        await command.ExecuteNonQueryAsync();
+        return clientId;
     }
 
     private static async Task<PaymentOrder> CreateOrderAsync(ServiceProvider services, string address = Address)

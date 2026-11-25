@@ -2,10 +2,12 @@ using System.Globalization;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
+using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Domain.Pricing;
+using FiatCryptoGateway.Domain.Settlement;
 
 namespace FiatCryptoGateway.Api.Contracts;
 
@@ -150,6 +152,68 @@ public sealed record WebhookDeliveryResponse(
 }
 
 public sealed record ReconcileRequest(string? Day);
+
+public sealed record RegisterWalletRequest(string? Network, string? Address, string? Label);
+
+public sealed record ReasonRequest(string? Reason);
+
+/// <summary>A settlement wallet as its merchant sees it: a neutral status and no screening detail.</summary>
+public sealed record SettlementWalletResponse(
+    Guid WalletId,
+    string Network,
+    string Address,
+    string? Label,
+    string Status,
+    DateTimeOffset RegisteredAt,
+    DateTimeOffset UsableFrom)
+{
+    public static SettlementWalletResponse From(SettlementWallet wallet, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(wallet);
+        return new SettlementWalletResponse(
+            wallet.WalletId, wallet.Network, wallet.Address, wallet.Label, SettlementWalletView.Status(wallet, now), wallet.RegisteredAt, wallet.UsableFrom);
+    }
+}
+
+public sealed record SettlementWalletActionResponse(int Sequence, string Action, string Actor, string? Reason, DateTimeOffset OccurredAt);
+
+/// <summary>A settlement wallet as a reviewer sees it, with its screening, what its merchant sees, and its history.</summary>
+public sealed record ReviewSettlementWalletResponse(
+    Guid WalletId,
+    string Merchant,
+    string Network,
+    string Address,
+    string? Label,
+    string Status,
+    string MerchantSees,
+    string ScreeningRisk,
+    string Screener,
+    string? ScreeningReference,
+    DateTimeOffset RegisteredAt,
+    DateTimeOffset UsableFrom,
+    DateTimeOffset? RetiredAt,
+    IReadOnlyList<SettlementWalletActionResponse> History)
+{
+    public static ReviewSettlementWalletResponse From(SettlementWallet wallet, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(wallet);
+        return new ReviewSettlementWalletResponse(
+            wallet.WalletId,
+            wallet.ClientId,
+            wallet.Network,
+            wallet.Address,
+            wallet.Label,
+            wallet.Status.ToString(),
+            SettlementWalletView.Status(wallet, now),
+            wallet.Screening.Risk.ToString(),
+            wallet.Screening.Screener,
+            wallet.Screening.Reference,
+            wallet.RegisteredAt,
+            wallet.UsableFrom,
+            wallet.RetiredAt,
+            [.. wallet.History.Select(action => new SettlementWalletActionResponse(action.Sequence, action.Kind.ToString(), action.Actor, action.Reason, action.OccurredAt))]);
+    }
+}
 
 /// <summary>A difference between a provider's report and the books. Amounts are null for the side that lacks the movement.</summary>
 public sealed record DiscrepancyResponse(

@@ -91,6 +91,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
 {
     private const string Address = "0x1111111111111111111111111111111111111111";
     private const string WebhookSecret = "test-only-merchant-webhook-secret-0123456789";
+    private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
 
     [Fact]
     public async Task MerchantWebhooks_AreSignedOrderedAndRevealNoComplianceDetail()
@@ -185,6 +186,61 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         Assert.Equal("INVALID_DAY", (await badDay.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
         using var merchantRun = await merchant.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "2026-11-24" });
         Assert.Equal(HttpStatusCode.Forbidden, merchantRun.StatusCode);
+    }
+
+    [Fact]
+    public async Task SettlementWallets_MerchantRegistersAndTheReviewerDecidesTheRiskyOnes()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 6, 0, 0, TimeSpan.Zero));
+        using var host = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(clock)));
+        using var merchant = host.CreateClient();
+        merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
+        using var otherMerchant = host.CreateClient();
+        otherMerchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientBKey);
+        using var reviewer = host.CreateClient();
+        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+
+        var clean = await PostAsync<SettlementWalletResponse>(
+            merchant, "/v1/settlement/wallets", new { network = "polygon", address = Address, label = "Treasury" }, HttpStatusCode.Created);
+        Assert.Equal(("polygon", "CoolingOff", clock.GetUtcNow().AddHours(24)), (clean.Network, clean.Status, clean.UsableFrom));
+        var again = await PostAsync<SettlementWalletResponse>(merchant, "/v1/settlement/wallets", new { network = "polygon", address = Address });
+        Assert.Equal(clean.WalletId, again.WalletId); // 200: already registered
+
+        using var riskyResponse = await merchant.PostAsJsonAsync(
+            new Uri("/v1/settlement/wallets", UriKind.Relative), new { network = "ethereum", address = SandboxWalletScreening.HighRiskAddress });
+        var riskyBody = await riskyResponse.Content.ReadAsStringAsync();
+        var risky = JsonSerializer.Deserialize<SettlementWalletResponse>(riskyBody, WebJson)!;
+        Assert.Equal("UnderReview", risky.Status);
+        foreach (var word in new[] { "High", "risk", "Risk", "screen" })
+        {
+            Assert.DoesNotContain(word, riskyBody, StringComparison.Ordinal); // the merchant learns nothing about the screening
+        }
+
+        var queue = await reviewer.GetFromJsonAsync<List<ReviewSettlementWalletResponse>>("/v1/review/settlement-wallets");
+        var item = Assert.Single(queue!);
+        Assert.Equal((risky.WalletId, "client-a", "High", "UnderReview"), (item.WalletId, item.Merchant, item.ScreeningRisk, item.MerchantSees));
+        using var noReason = await reviewer.PostAsJsonAsync(new Uri($"/v1/review/settlement-wallets/{risky.WalletId}/approve", UriKind.Relative), new { });
+        Assert.Equal("REASON_REQUIRED", (await noReason.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
+        var approved = await PostAsync<ReviewSettlementWalletResponse>(
+            reviewer, $"/v1/review/settlement-wallets/{risky.WalletId}/approve", new { reason = "Merchant's own exchange account, verified." });
+        Assert.Equal(("Approved", "CoolingOff", "compliance-officer"), (approved.Status, approved.MerchantSees, approved.History[^1].Actor));
+
+        clock.Advance(TimeSpan.FromHours(24));
+        var wallets = await merchant.GetFromJsonAsync<List<SettlementWalletResponse>>("/v1/settlement/wallets");
+        Assert.Equal([("ethereum", "Active"), ("polygon", "Active")], wallets!.Select(w => (w.Network, w.Status)).Order());
+
+        using var otherDisable = await otherMerchant.PostAsync(new Uri($"/v1/settlement/wallets/{clean.WalletId}/disable", UriKind.Relative), null);
+        Assert.Equal(HttpStatusCode.NotFound, otherDisable.StatusCode);
+        Assert.Empty((await otherMerchant.GetFromJsonAsync<List<SettlementWalletResponse>>("/v1/settlement/wallets"))!);
+        var disabled = await PostAsync<SettlementWalletResponse>(merchant, $"/v1/settlement/wallets/{clean.WalletId}/disable", new { });
+        Assert.Equal("Disabled", disabled.Status);
+
+        using var badAddress = await merchant.PostAsJsonAsync(new Uri("/v1/settlement/wallets", UriKind.Relative), new { network = "tron", address = Address });
+        Assert.Equal("INVALID_WALLET_ADDRESS", (await badAddress.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
+        using var badNetwork = await merchant.PostAsJsonAsync(new Uri("/v1/settlement/wallets", UriKind.Relative), new { network = "bitcoin", address = Address });
+        Assert.Equal("UNSUPPORTED_NETWORK", (await badNetwork.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
+        using var merchantOnQueue = await merchant.GetAsync(new Uri("/v1/review/settlement-wallets", UriKind.Relative));
+        Assert.Equal(HttpStatusCode.Forbidden, merchantOnQueue.StatusCode);
     }
 
     [Fact]

@@ -50,6 +50,8 @@ public sealed class StartupSettingsTests
     [InlineData("Gateway:Webhooks:LeaseSeconds", "100")] // shorter than a batch of timeouts
     [InlineData("Gateway:Reconciliation:TimeZone", "Mars/Olympus_Mons")]
     [InlineData("Gateway:Reconciliation:RunAfterHour", "25")]
+    [InlineData("Gateway:Settlement:CoolingOffHours", "-1")]
+    [InlineData("Gateway:Settlement:Networks", "polygon,mars")]
     public void InvalidLimitsOrDeliverySettings_StopStartup(string key, string value)
     {
         Assert.Throws<OptionsValidationException>(() => Validate((key, value)));

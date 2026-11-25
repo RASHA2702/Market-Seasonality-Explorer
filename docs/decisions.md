@@ -19,6 +19,8 @@ Last updated: 2026-11-25.
 - Question 22: brand name and domain.
 - Question 25: renaming the repository.
 - Question 27: launch date, out-of-hours cover, and who checks reconciliation differences each morning.
+- Question 17: confirm the 24-hour cooling-off period for new settlement wallets, and that risky wallets may be
+  approved by you (sanctioned ones never can).
 - The points marked **[Lawyer]** and **[Accountant]**.
 
 ## ★ Product scope
@@ -160,6 +162,16 @@ partner sends and receives the transfers.
 **ANSWERED**: "Yes" (you want screening vendors). Then (2026-11-24): at launch the partner screens wallets.
 Your own vendor (for example Chainalysis, TRM or Elliptic) can be added later behind the gateway's existing
 wallet-screening interface.
+- Built: merchants' settlement wallets are screened when registered (see question 1: merchants choose stablecoin
+  settlement). **PROPOSED** defaults, all configurable:
+  - a clean wallet can receive payments only after a **24-hour cooling-off period**, so a merchant can disable a
+    wallet it did not add (for example one added with a stolen API key);
+  - a risky wallet, or one whose screening could not finish, waits for you to approve or reject it, with a reason;
+    a sanctioned wallet can only be rejected;
+  - one wallet per network, and a replacement takes over only when it becomes usable.
+- **[Lawyer]** Whether the gateway (or the partner) must prove that a merchant controls its settlement wallet
+  (self-hosted wallet rules under the Travel Rule), and what may be said to a merchant whose wallet is declined.
+  Merchants currently see only "UnderReview" and "NotAccepted".
 
 ## Customer verification
 

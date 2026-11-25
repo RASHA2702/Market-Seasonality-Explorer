@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-11-25 — Merchant settlement wallets
+
+- Each merchant registers the wallet it is paid into, one per network (`/v1/settlement/wallets`). Every new wallet
+  is screened. A clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a
+  wallet it did not add (for example one added with a stolen key); a risky one, or one whose screening could not
+  finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see neutral statuses only.
+- A replacement wallet takes over the moment it becomes usable; withdrawing it before then leaves the old wallet in
+  use. Only one change per network can be waiting at a time.
+- Reviewers see waiting wallets with their screening and decide at `/v1/review/settlement-wallets`, each decision
+  with a reason. Wallet history is append-only, and the database refuses edits to a stored wallet's address or
+  screening, reopening a closed wallet, and approving a blocked one (migration `008_settlement_wallets`).
+- Settings under `Gateway:Settlement` (`CoolingOffHours`, `Networks`) are checked at startup.
+
 ## 2026-11-25 — Launch stablecoins in the sandbox
 
 - The sandbox now has every stablecoin chosen in question 13: USDT on Tron, and USDT and USDC on Polygon,

@@ -7,6 +7,7 @@ using FiatCryptoGateway.Domain.Compliance;
 using FiatCryptoGateway.Domain.Ledger;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Domain.Pricing;
+using FiatCryptoGateway.Domain.Settlement;
 
 namespace FiatCryptoGateway.Sandbox;
 
@@ -345,5 +346,60 @@ public sealed class InMemoryOutbox : IOutbox
         public DateTimeOffset? DeadAt { get; set; }
 
         public string? LastError { get; set; }
+    }
+}
+
+/// <summary>Keeps copies, so a change is visible only once saved and a stale copy cannot overwrite a newer one.</summary>
+public sealed class InMemorySettlementStore : ISettlementStore
+{
+    private readonly Dictionary<string, MerchantSettlement> _settlements = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
+
+    public Task<MerchantSettlement> GetAsync(string clientId, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(_settlements.TryGetValue(clientId, out var stored) ? stored.Copy() : MerchantSettlement.Empty(clientId));
+        }
+    }
+
+    public Task SaveAsync(MerchantSettlement settlement, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(settlement);
+        lock (_gate)
+        {
+            var storedVersion = _settlements.TryGetValue(settlement.ClientId, out var stored) ? stored.Version : 0;
+            if (storedVersion != settlement.Version)
+            {
+                throw new SettlementConcurrencyException();
+            }
+
+            settlement.Version++;
+            _settlements[settlement.ClientId] = settlement.Copy();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<string?> FindOwnerAsync(Guid walletId, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(_settlements.Values.FirstOrDefault(settlement => settlement.Find(walletId) is not null)?.ClientId);
+        }
+    }
+
+    public Task<IReadOnlyList<SettlementWallet>> ListUnderReviewAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<SettlementWallet> wallets = _settlements.Values
+                .SelectMany(settlement => settlement.Copy().Wallets)
+                .Where(wallet => wallet.Status == SettlementWalletStatus.UnderReview)
+                .OrderBy(wallet => wallet.RegisteredAt)
+                .ToList()
+                .AsReadOnly();
+            return Task.FromResult(wallets);
+        }
     }
 }

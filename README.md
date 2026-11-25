@@ -20,10 +20,11 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
+| Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every status change a merchant may see is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 247 .NET tests (15 of them against a real PostgreSQL in Docker), 33 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 282 .NET tests (18 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -162,6 +163,30 @@ until the earlier one is delivered or given up. These and other settings are und
 (`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
 `IntervalSeconds`, `Enabled`).
 
+### Settlement wallets
+
+Each merchant registers the wallet it is paid into, one per network (Tron, Polygon, Ethereum and Solana by
+default), with its merchant key:
+
+```bash
+curl -s -X POST http://127.0.0.1:5080/v1/settlement/wallets -H "Authorization: Bearer $key" -H "Content-Type: application/json" -d '{"network":"polygon","address":"0x...","label":"Treasury"}'
+```
+
+Every new wallet is screened. The merchant sees one of these statuses, never the screening detail:
+
+| Status | Meaning |
+|---|---|
+| `CoolingOff` | Screened clean; it can receive payments from `usableFrom` (24 hours after registration by default). A merchant that did not register it should disable it at once. |
+| `UnderReview` | Waiting for a reviewer: screening found risk or could not finish. A sanctioned wallet stays here until a reviewer rejects it; it can never be approved. |
+| `Active` | Receives the merchant's payments on its network. |
+| `Replaced` | A newer wallet for the network took over when it became usable. Until then this one stayed active. |
+| `NotAccepted`, `Disabled` | Declined by a reviewer, or withdrawn by the merchant (`POST /v1/settlement/wallets/{id}/disable`) or a reviewer. |
+
+Only one change per network can be waiting at a time. Reviewers see waiting wallets with their screening at
+`GET /v1/review/settlement-wallets` and decide with `/approve`, `/reject` or `/disable`, each with a `reason`.
+Settings are under `Gateway:Settlement`: `CoolingOffHours` (24) and `Networks` (`tron,polygon,ethereum,solana`).
+For local testing, `Gateway__Settlement__CoolingOffHours=0` makes clean wallets usable at once.
+
 ### Daily reconciliation
 
 Each morning after 06:00 India time, the API compares every provider's settlement report for the previous
@@ -206,6 +231,10 @@ records are kept in memory: after a restart with PostgreSQL storage, payments fr
 | `GET /v1/review/queue`, `GET /v1/review/orders/{id}` | Reviewer keys only: held payments, longest-waiting first, with an overdue flag; full screening reasons and the review log. |
 | `POST /v1/review/orders/{id}/approve`, `/reject`, `/freeze`, `/release` | Reviewer decisions. Each needs a `reason`; `/freeze` also needs the `reportReference` of the report filed. |
 | `GET /v1/review/orders/{id}/webhooks` | Reviewer keys only: each merchant notification for the order, with its delivery state, attempts and last error. |
+| `GET /v1/settlement/wallets`, `POST /v1/settlement/wallets` | The merchant's settlement wallets, newest first; register one (`network`, `address`, optional `label`). |
+| `POST /v1/settlement/wallets/{id}/disable` | Withdraw one of the merchant's wallets. |
+| `GET /v1/review/settlement-wallets`, `GET /v1/review/settlement-wallets/{id}` | Reviewer keys only: wallets waiting for review, with their screening and history. |
+| `POST /v1/review/settlement-wallets/{id}/approve`, `/reject`, `/disable` | Reviewer decisions on a wallet, each with a `reason`. A sanctioned wallet cannot be approved. |
 | `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
 | `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd` | Reviewer keys only: reconciliation runs, newest first, with every difference found. |
 | `POST /v1/review/reconciliation/runs` | Reviewer keys only: reconcile a finished day now (`{"day":"yyyy-MM-dd"}`). |

@@ -47,6 +47,7 @@ public static class SandboxServiceCollectionExtensions
         services.AddSingleton<IWebhookInbox, InMemoryWebhookInbox>();
         services.AddSingleton<IOrderLocks, InMemoryOrderLocks>();
         services.AddSingleton<IReconciliationStore, InMemoryReconciliationStore>();
+        services.AddSingleton<ISettlementStore, InMemorySettlementStore>();
         services.AddSingleton<IStorageInitializer, InMemoryStorageInitializer>();
         return services;
     }
