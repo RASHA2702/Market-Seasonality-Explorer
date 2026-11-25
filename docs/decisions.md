@@ -39,7 +39,13 @@ consumer on-ramp.
 **ANSWERED** (2026-11-24): merchants, through an API plus a checkout page that the gateway hosts. Their
 customers pay on that page.
 - Built: signed webhooks tell each merchant about every status change it may see, in order, with retries
-  (compliance steps appear only as "on hold"). The hosted checkout page is not built yet.
+  (compliance steps appear only as "on hold").
+- Built: the hosted checkout page. Each order links to it; the customer sees the merchant, the amount and the
+  deadline, picks a payment method and pays (simulated in the sandbox; the partner's payment step once one is
+  chosen). Customers see only waiting, received, refund started, refunded or expired.
+- **[Lawyer]** What the checkout page must show a customer (for example terms, privacy notice, refund policy and a
+  grievance contact under the rules for payment aggregators and consumer protection), and what a customer may be
+  told when a received payment is later refunded after a compliance hold.
 
 ### 3. Operate as a regulated operator, or partner with licensed providers first?
 **ANSWERED**: "Yes partners." Start by partnering with licensed providers.
@@ -216,7 +222,8 @@ wallet-screening interface.
 
 ### 22. Customer experience, brand name and domain
 **ANSWERED** (part): a hosted checkout page plus an API for merchants (question 2).
-- Brand name and domain: **OPEN**.
+- Brand name and domain: **OPEN**. The checkout page shows the merchant's name and no gateway brand yet; once a
+  domain is chosen, it becomes `Gateway:Checkout:BaseUrl`.
 
 ### 23. Hosting (cloud, region, budget)
 **ANSWERED**: "for now locally but we would have to scale up in the future if needed."

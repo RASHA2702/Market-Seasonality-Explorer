@@ -1,4 +1,5 @@
 using System.Globalization;
+using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
@@ -108,10 +109,12 @@ public sealed record OrderResponse(
 {
     /// <summary>
     /// The merchant view hides compliance detail (see <see cref="MerchantView"/>); reviewers get the full view.
+    /// <c>CheckoutUrl</c> is the gateway's hosted page the merchant sends its customer to.
     /// </summary>
-    public static OrderResponse From(PaymentOrder order, bool fullDetail = false)
+    public static OrderResponse From(PaymentOrder order, CheckoutLinks links, bool fullDetail = false)
     {
         ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(links);
         IEnumerable<OrderEventResponse> events = fullDetail
             ? order.Events.Select(e => new OrderEventResponse(e.Sequence, e.From?.ToString(), e.To.ToString(), e.OccurredAt, e.Reason))
             : MerchantView.Events(order).Select(e => new OrderEventResponse(e.Sequence, e.From, e.To, e.OccurredAt, e.Reason));
@@ -125,7 +128,7 @@ public sealed record OrderResponse(
             order.Quote.SourceAmount.ToFixedString(),
             order.Quote.DestinationAmount.Asset.Id.ToString(),
             order.Quote.DestinationAmount.ToFixedString(),
-            order.CheckoutUrl,
+            links.Url(order.OrderId),
             order.PaymentDeadline,
             order.Transfer?.TransactionHash,
             order.Confirmations,
@@ -323,11 +326,11 @@ public sealed record ReviewOrderResponse(
     IReadOnlyList<ComplianceDecisionResponse> ComplianceHistory,
     IReadOnlyList<ReviewActionResponse> ReviewActions)
 {
-    public static ReviewOrderResponse From(PaymentOrder order)
+    public static ReviewOrderResponse From(PaymentOrder order, CheckoutLinks links)
     {
         ArgumentNullException.ThrowIfNull(order);
         return new ReviewOrderResponse(
-            OrderResponse.From(order, fullDetail: true),
+            OrderResponse.From(order, links, fullDetail: true),
             order.ClientId,
             order.ReportReference,
             [.. order.ComplianceHistory.Select(d => new ComplianceDecisionResponse(d.Outcome.ToString(), d.Reasons, d.Screener, d.DecidedAt))],

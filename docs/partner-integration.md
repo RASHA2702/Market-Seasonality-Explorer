@@ -48,6 +48,9 @@ Other changes:
   order pays out only to the merchant's active wallet for its network).
 - **Ledger**: the gateway's books mirror what the partner reports (amounts collected, delivered, fees), in
   partner-clearing accounts, with no company wallet accounts. The daily reconciliation (built) compares the two.
+- **Checkout**: the gateway's hosted page (built) keeps showing the order and its status; its Pay step hands over
+  to the partner's payment page, UPI request or bank details from `CreateOrderAsync`, instead of the sandbox
+  simulation.
 - **Order states**: payment received, then delivered by the partner (with the transaction hash), then
   confirmed. Whether a held-for-review step fits between payment and delivery depends on the partner (see
   the questions below).

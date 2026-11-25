@@ -18,6 +18,16 @@ public sealed class ApiKeyClient
     /// <summary><c>Merchant</c> (default) creates payments; <c>Reviewer</c> works the compliance queue.</summary>
     public string Role { get; set; } = nameof(ApiClientRole.Merchant);
 
+    /// <summary>The name customers see on the checkout page (merchants only). Defaults to the client ID.</summary>
+    public string? DisplayName { get; set; }
+
+    /// <summary>
+    /// Where the checkout page sends a customer back to when the payment is done (merchants only): HTTPS, or HTTP to
+    /// this machine for local testing. The order ID is added as <c>?order=</c>; the merchant must still check the
+    /// order through the API, because anyone can open that address.
+    /// </summary>
+    public Uri? CheckoutReturnUrl { get; set; }
+
     /// <summary>Where order status changes are posted (merchants only). HTTPS, or HTTP to this machine for local testing.</summary>
     public Uri? WebhookUrl { get; set; }
 
@@ -65,6 +75,7 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
             }
 
             ValidateWebhook(client, failures);
+            ValidateCheckout(client, failures);
         }
 
         if (options.Clients.Select(client => client.ClientId).Distinct(StringComparer.Ordinal).Count() != options.Clients.Count)
@@ -74,6 +85,34 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
+
+    private static void ValidateCheckout(ApiKeyClient client, List<string> failures)
+    {
+        if (client.DisplayName is { } name && (string.IsNullOrWhiteSpace(name) || name.Length > 100 || name.Any(char.IsControl)))
+        {
+            failures.Add($"API client '{client.ClientId}' needs a DisplayName of 1 to 100 printable characters, or none.");
+        }
+
+        if (client.CheckoutReturnUrl is null)
+        {
+            return;
+        }
+
+        if (client.Role != nameof(ApiClientRole.Merchant))
+        {
+            failures.Add($"API client '{client.ClientId}' is not a merchant, so it has no checkout to return to.");
+        }
+
+        if (!IsSafeCallbackUrl(client.CheckoutReturnUrl))
+        {
+            failures.Add($"API client '{client.ClientId}' needs CheckoutReturnUrl: an absolute HTTPS URL without credentials (HTTP only to localhost).");
+        }
+    }
+
+    private static bool IsSafeCallbackUrl(Uri? url) =>
+        url is { IsAbsoluteUri: true } &&
+        (url.Scheme == Uri.UriSchemeHttps || (url.Scheme == Uri.UriSchemeHttp && url.IsLoopback)) &&
+        string.IsNullOrEmpty(url.UserInfo);
 
     // Messages name the client and the rule, never the URL's query or the secret.
     private static void ValidateWebhook(ApiKeyClient client, List<string> failures)
@@ -88,9 +127,7 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
             failures.Add($"API client '{client.ClientId}' is not a merchant, so it cannot receive webhooks.");
         }
 
-        if (client.WebhookUrl is not { IsAbsoluteUri: true } url ||
-            !(url.Scheme == Uri.UriSchemeHttps || (url.Scheme == Uri.UriSchemeHttp && url.IsLoopback)) ||
-            !string.IsNullOrEmpty(url.UserInfo))
+        if (!IsSafeCallbackUrl(client.WebhookUrl))
         {
             failures.Add($"API client '{client.ClientId}' needs WebhookUrl: an absolute HTTPS URL without credentials (HTTP only to localhost).");
         }

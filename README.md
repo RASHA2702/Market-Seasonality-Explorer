@@ -20,11 +20,12 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
+| Hosted checkout | Every order comes with a signed link to a mobile-first page the gateway hosts, where the customer sees the merchant, the amount in rupees and the deadline, chooses UPI, card, netbanking or bank transfer, and pays (simulated in the sandbox). Customers see only "waiting for payment", "payment received", "refund started", "refunded" or "expired": compliance holds look like any received payment. The page loads nothing from other sites and cannot be framed. |
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 292 .NET tests (19 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 347 .NET tests (19 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -70,6 +71,8 @@ Prerequisites: .NET SDK 10.
      -H "Idempotency-Key: $(uuidgen)" \
      -d '{"quoteId":"<quoteId from above>","customerId":"cust_verified"}'
    ```
+
+   Open the order's `checkoutUrl` in a browser to pay as a customer would, or simulate the payment directly:
 
    ```bash
    curl -s -X POST http://127.0.0.1:5080/v1/sandbox/orders/<orderId>/pay -H "Authorization: Bearer $key"
@@ -196,6 +199,32 @@ wallet waits until the earlier one is delivered or given up. These and other set
 (`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
 `IntervalSeconds`, `Enabled`).
 
+### Hosted checkout page
+
+Every order's `checkoutUrl` is a link to a page the gateway hosts. The merchant sends its customer there (a redirect
+or a link); the customer sees the merchant's name, the amount in rupees (₹1,25,000.00), how long the price is held
+and the payment methods (UPI, card, netbanking, bank transfer), and pays. In the sandbox the Pay button simulates the
+payment through the same signed provider event a real payment produces; once a payment partner is connected, that
+step hands over to the partner. The page then shows the result and updates by itself.
+
+Customers see one of: waiting for payment, payment received, refund started, refunded, or expired. Review,
+rejection and freezing all look like "payment received", so nothing tips off a customer under suspicion.
+
+The link is signed (HMAC-SHA256 of the order ID), so it cannot be guessed or changed to another order, and it is the
+customer's only credential: no account, no cookie. Settings:
+
+```bash
+export Gateway__Checkout__BaseUrl=https://pay.example.com   # the public address the pages are served from
+export Gateway__Checkout__LinkSecret=<at least 32 random characters, for example from: openssl rand -hex 32>
+export Gateway__ApiKeys__Clients__0__DisplayName="Acme Books"                       # what customers see
+export Gateway__ApiKeys__Clients__0__CheckoutReturnUrl=https://acme.example/paid    # optional "Back to" link
+```
+
+Without a `LinkSecret`, links use a random secret that changes on every restart; set one for PostgreSQL storage or
+more than one instance. The return link gets `?order=<id>` added; anyone can open that address, so the merchant
+must confirm the payment through the API or a webhook, never from the redirect alone. Deadlines are shown in
+`Gateway:Checkout:TimeZone` (India Standard Time by default).
+
 ### Settlement wallets
 
 Each merchant registers the wallet it is paid into, one per network (Tron, Polygon, Ethereum and Solana by
@@ -273,6 +302,8 @@ records are kept in memory: after a restart with PostgreSQL storage, payments fr
 | `GET /v1/review/settlement-wallets/{id}/webhooks` | Reviewer keys only: the merchant notifications about a wallet, with their delivery state. |
 | `POST /v1/review/settlement-wallets/{id}/approve`, `/reject`, `/disable` | Reviewer decisions on a wallet, each with a `reason`. A sanctioned wallet cannot be approved. |
 | `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
+| `GET /checkout/{link}`, `GET /checkout/{link}/status` | The customer's payment page and its status (no key: the signed link is the credential). |
+| `POST /checkout/{link}/pay` | Sandbox only: the customer's simulated payment, then back to the page. |
 | `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd` | Reviewer keys only: reconciliation runs, newest first, with every difference found. |
 | `POST /v1/review/reconciliation/runs` | Reviewer keys only: reconcile a finished day now (`{"day":"yyyy-MM-dd"}`). |
 

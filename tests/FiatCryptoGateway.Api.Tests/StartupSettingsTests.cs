@@ -51,6 +51,11 @@ public sealed class StartupSettingsTests
     [InlineData("Gateway:Reconciliation:TimeZone", "Mars/Olympus_Mons")]
     [InlineData("Gateway:Reconciliation:RunAfterHour", "25")]
     [InlineData("Gateway:Settlement:CoolingOffHours", "-1")]
+    [InlineData("Gateway:Checkout:BaseUrl", "http://pay.example.com")]
+    [InlineData("Gateway:Checkout:LinkSecret", "too-short")]
+    [InlineData("Gateway:ApiKeys:Clients:0:CheckoutReturnUrl", "http://merchant.example/return")]
+    [InlineData("Gateway:ApiKeys:Clients:2:CheckoutReturnUrl", "https://merchant.example/return")] // a reviewer has no checkout
+    [InlineData("Gateway:ApiKeys:Clients:0:DisplayName", " ")]
     [InlineData("Gateway:Settlement:Networks", "polygon,mars")]
     public void InvalidLimitsOrDeliverySettings_StopStartup(string key, string value)
     {

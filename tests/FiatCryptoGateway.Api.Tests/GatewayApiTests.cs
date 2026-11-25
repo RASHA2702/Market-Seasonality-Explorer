@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FiatCryptoGateway.Api.Contracts;
+using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Webhooks;
@@ -308,6 +309,20 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         });
         var deliveries = await reviewer.GetFromJsonAsync<List<WebhookDeliveryResponse>>($"/v1/review/settlement-wallets/{risky.WalletId}/webhooks");
         Assert.Equal([("Delivered", 1), ("Delivered", 2)], deliveries!.Select(d => (d.Status, d.OrderEventSequence)));
+    }
+
+    [Fact]
+    public async Task OrderResponse_LinksToTheHostedCheckoutPage()
+    {
+        using var host = factory.WithWebHostBuilder(builder => builder.UseSetting("Gateway:Checkout:BaseUrl", "https://pay.example.com"));
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
+
+        var order = await CreateOrderAsync(client, (await CreateQuoteAsync(client)).QuoteId, Guid.NewGuid().ToString());
+
+        Assert.StartsWith("https://pay.example.com/checkout/", order.CheckoutUrl!.ToString(), StringComparison.Ordinal);
+        Assert.True(host.Services.GetRequiredService<CheckoutLinks>().TryRead(order.CheckoutUrl.Segments[^1], out var orderId));
+        Assert.Equal(order.OrderId, orderId);
     }
 
     [Fact]

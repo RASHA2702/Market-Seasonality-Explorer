@@ -6,6 +6,7 @@ using System.Text.Json;
 using FiatCryptoGateway.Api.Auth;
 using FiatCryptoGateway.Api.Contracts;
 using FiatCryptoGateway.Application;
+using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.OnRamp;
@@ -56,14 +57,14 @@ public static class GatewayEndpoints
         var review = app.MapGroup("/v1/review").RequireAuthorization(ApiPolicies.Reviewer).AddEndpointFilter<GatewayErrorFilter>();
         review.MapGet("/queue", GetReviewQueue);
         review.MapGet("/orders/{orderId:guid}", GetReviewOrder);
-        review.MapPost("/orders/{orderId:guid}/approve", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
-            Review(orderId, request, ReviewActionKind.Approve, user, reviews, ct));
-        review.MapPost("/orders/{orderId:guid}/reject", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
-            Review(orderId, request, ReviewActionKind.Reject, user, reviews, ct));
-        review.MapPost("/orders/{orderId:guid}/freeze", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
-            Review(orderId, request, ReviewActionKind.FreezeAndReport, user, reviews, ct));
-        review.MapPost("/orders/{orderId:guid}/release", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CancellationToken ct) =>
-            Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, ct));
+        review.MapPost("/orders/{orderId:guid}/approve", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CheckoutLinks links, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.Approve, user, reviews, links, ct));
+        review.MapPost("/orders/{orderId:guid}/reject", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CheckoutLinks links, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.Reject, user, reviews, links, ct));
+        review.MapPost("/orders/{orderId:guid}/freeze", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CheckoutLinks links, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.FreezeAndReport, user, reviews, links, ct));
+        review.MapPost("/orders/{orderId:guid}/release", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CheckoutLinks links, CancellationToken ct) =>
+            Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, links, ct));
         review.MapGet("/orders/{orderId:guid}/webhooks", GetWebhookDeliveries);
         review.MapGet("/ledger/balances", GetLedgerBalances);
         review.MapGet("/settlement-wallets", ListSettlementWalletsForReview);
@@ -115,6 +116,7 @@ public static class GatewayEndpoints
     private static async Task<IResult> CreateOrder(
         HttpContext http,
         OnRampService onRamp,
+        CheckoutLinks links,
         IIdempotencyStore idempotency,
         IOptions<JsonOptions> jsonOptions,
         CancellationToken cancellationToken)
@@ -154,7 +156,7 @@ public static class GatewayEndpoints
         StoredResponse response;
         try
         {
-            response = await ExecuteCreateOrderAsync(body, clientId, onRamp, json, cancellationToken);
+            response = await ExecuteCreateOrderAsync(body, clientId, onRamp, links, json, cancellationToken);
         }
         catch
         {
@@ -171,6 +173,7 @@ public static class GatewayEndpoints
         string body,
         string clientId,
         OnRampService onRamp,
+        CheckoutLinks links,
         JsonSerializerOptions json,
         CancellationToken cancellationToken)
     {
@@ -191,7 +194,7 @@ public static class GatewayEndpoints
             }
 
             var order = await onRamp.CreateOrderAsync(clientId, new CreateOrderCommand(quoteId, request.CustomerId), cancellationToken);
-            return new StoredResponse(StatusCodes.Status201Created, JsonSerializer.Serialize(OrderResponse.From(order), json));
+            return new StoredResponse(StatusCodes.Status201Created, JsonSerializer.Serialize(OrderResponse.From(order, links), json));
         }
         catch (JsonException)
         {
@@ -214,8 +217,9 @@ public static class GatewayEndpoints
         Guid orderId,
         ClaimsPrincipal user,
         OnRampService onRamp,
+        CheckoutLinks links,
         CancellationToken cancellationToken) =>
-        OrderResponse.From(await onRamp.GetOrderAsync(user.GetClientId(), orderId, cancellationToken));
+        OrderResponse.From(await onRamp.GetOrderAsync(user.GetClientId(), orderId, cancellationToken), links);
 
     private static async Task<IEnumerable<LedgerEntryResponse>> GetOrderLedger(
         Guid orderId,
@@ -257,6 +261,7 @@ public static class GatewayEndpoints
         ClaimsPrincipal user,
         OnRampService onRamp,
         SandboxFiatWebhookHandler webhooks,
+        CheckoutLinks links,
         CancellationToken cancellationToken)
     {
         var clientId = user.GetClientId();
@@ -272,7 +277,7 @@ public static class GatewayEndpoints
             throw new InvalidOperationException($"The sandbox payment event was not accepted: {result}.");
         }
 
-        return Results.Ok(OrderResponse.From(await onRamp.GetOrderAsync(clientId, orderId, cancellationToken)));
+        return Results.Ok(OrderResponse.From(await onRamp.GetOrderAsync(clientId, orderId, cancellationToken), links));
     }
 
     private static async Task<OrderResponse> SimulateConfirmations(
@@ -281,6 +286,7 @@ public static class GatewayEndpoints
         ClaimsPrincipal user,
         OnRampService onRamp,
         ICustodyProvider custody,
+        CheckoutLinks links,
         CancellationToken cancellationToken)
     {
         var clientId = user.GetClientId();
@@ -289,7 +295,7 @@ public static class GatewayEndpoints
             ?? throw new GatewayRuleException("ORDER_STATE_CONFLICT", "The order has no on-chain transfer to confirm yet.");
         var confirmations = request?.Confirmations ?? custody.RequiredConfirmations(order.Quote.DestinationAmount.Asset);
         return OrderResponse.From(
-            await onRamp.RecordConfirmationsAsync(clientId, orderId, transfer.TransactionHash, confirmations, cancellationToken));
+            await onRamp.RecordConfirmationsAsync(clientId, orderId, transfer.TransactionHash, confirmations, cancellationToken), links);
     }
 
     private static async Task<IEnumerable<ReviewQueueItemResponse>> GetReviewQueue(
@@ -300,8 +306,9 @@ public static class GatewayEndpoints
     private static async Task<ReviewOrderResponse> GetReviewOrder(
         Guid orderId,
         ComplianceReviewService reviews,
+        CheckoutLinks links,
         CancellationToken cancellationToken) =>
-        ReviewOrderResponse.From(await reviews.GetOrderAsync(orderId, cancellationToken));
+        ReviewOrderResponse.From(await reviews.GetOrderAsync(orderId, cancellationToken), links);
 
     private static async Task<ReviewOrderResponse> Review(
         Guid orderId,
@@ -309,9 +316,11 @@ public static class GatewayEndpoints
         ReviewActionKind kind,
         ClaimsPrincipal user,
         ComplianceReviewService reviews,
+        CheckoutLinks links,
         CancellationToken cancellationToken) =>
-        ReviewOrderResponse.From(await reviews.ReviewAsync(
-            orderId, kind, user.GetClientId(), request?.Reason ?? string.Empty, request?.ReportReference, cancellationToken));
+        ReviewOrderResponse.From(
+            await reviews.ReviewAsync(orderId, kind, user.GetClientId(), request?.Reason ?? string.Empty, request?.ReportReference, cancellationToken),
+            links);
 
     /// <summary>Whole-ledger balances across all merchants. Reviewer keys only.</summary>
     private static async Task<IEnumerable<WebhookDeliveryResponse>> GetWebhookDeliveries(

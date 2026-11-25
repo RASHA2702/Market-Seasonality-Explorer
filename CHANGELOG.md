@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-11-25 — Hosted checkout page
+
+- Every order's `checkoutUrl` now links to a page the gateway hosts. The customer sees the merchant, the amount in
+  rupees (Indian digit grouping) and the deadline in IST, chooses UPI, card, netbanking or bank transfer, and pays;
+  in the sandbox the payment is simulated through the same signed provider event a real one produces. The page then
+  shows the result and refreshes itself while a payment or refund is under way.
+- Customers see only waiting, received, refund started, refunded or expired. Compliance holds look like any
+  received payment. An unpaid order past its deadline is shown as expired and takes no payment.
+- Links are HMAC-signed order IDs (no storage, no cookies). The page loads nothing from other sites, uses a strict
+  content security policy with per-response nonces, and is never cached, framed, indexed or sent as a referrer.
+- New settings: `Gateway:Checkout` (`BaseUrl`, `LinkSecret`, `TimeZone`) and, per merchant, `DisplayName` and
+  `CheckoutReturnUrl`; all checked at startup.
+
 ## 2026-11-25 — Merchants are notified of settlement wallet changes
 
 - Every registration, review decision and withdrawal of a settlement wallet sends the merchant a signed

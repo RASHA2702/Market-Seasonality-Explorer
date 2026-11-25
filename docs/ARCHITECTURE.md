@@ -123,6 +123,25 @@ not the customer.
 - Liquidity, custody and refund calls must be idempotent per order ID: a retried send never sends twice.
   The sandbox enforces this and a test reprocesses completed orders to prove it.
 
+## Hosted checkout
+
+- **Signed links.** A checkout link is the order ID plus an HMAC-SHA256 of it under `Gateway:Checkout:LinkSecret`.
+  It cannot be guessed or edited to reach another order, needs no storage, and is checked in constant time. It is
+  the customer's only credential: there is no login and no cookie, so there is nothing for cross-site request forgery
+  to ride on. An unknown and an altered link get the same "not found" page.
+- **Customer view.** `CustomerView` maps every order status to what a paying customer may know: waiting, received,
+  refund started, refunded, expired. Compliance states and the merchant's settlement all read as "payment received".
+  An unpaid order past its deadline is shown as expired at once, and the page takes no payment for it.
+- **Page.** One server-rendered, mobile-first document; every value is HTML-encoded. It loads nothing from other
+  sites, and its one style and one script carry a per-response nonce under `default-src 'none'`. Responses are not
+  cached, framed (`frame-ancestors 'none'`), sniffed, indexed or sent on as a referrer. It works without JavaScript;
+  the script only counts down and reloads when the status changes.
+- **Paying.** In the sandbox, the Pay button posts to the gateway, which simulates the provider's signed payment
+  event, then redirects back to the page (post, redirect, get), so a refresh or a double click pays once. With a
+  partner, this step hands over to the partner's payment page or UPI details instead.
+- **Return link.** Per merchant, set by the operator (HTTPS only), never taken from a request, so the page cannot be
+  used to redirect customers to arbitrary sites.
+
 ## Merchant notifications
 
 Merchants are told about every order status change they may see and every change to their settlement wallets,

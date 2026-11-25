@@ -1,4 +1,5 @@
 using FiatCryptoGateway.Api;
+using FiatCryptoGateway.Api.Checkout;
 using FiatCryptoGateway.Api.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +11,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapHealthChecks("/health");
 app.MapGatewayEndpoints();
+app.MapCheckout();
 
 app.Run();
 
