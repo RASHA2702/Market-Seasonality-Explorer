@@ -232,6 +232,7 @@ public static class PostgresServiceCollectionExtensions
         services.AddSingleton<IOutbox, PostgresOutbox>();
         services.AddSingleton<IReconciliationStore, PostgresReconciliationStore>();
         services.AddSingleton<ISettlementStore, PostgresSettlementStore>();
+        services.AddSingleton<Application.Reviewers.IReviewerAccessStore, PostgresReviewerAccessStore>();
         services.AddSingleton<IStorageInitializer>(provider => new PostgresStorageInitializer(
             provider.GetRequiredService<NpgsqlDataSource>(),
             provider.GetRequiredService<PostgresMigrator>(),

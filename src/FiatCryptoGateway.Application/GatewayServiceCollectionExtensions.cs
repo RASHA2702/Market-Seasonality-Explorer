@@ -70,6 +70,11 @@ public static class GatewayServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<Webhooks.WebhookOptions>, Webhooks.WebhookOptionsValidator>();
         services.AddOptions<Webhooks.WebhookOptions>().Bind(configuration.GetSection(Webhooks.WebhookOptions.SectionName)).ValidateOnStart();
         services.AddSingleton<Webhooks.MerchantWebhookDispatcher>();
+        services.AddSingleton<IValidateOptions<Reviewers.ReviewerAccessOptions>, Reviewers.ReviewerAccessOptionsValidator>();
+        services.AddOptions<Reviewers.ReviewerAccessOptions>()
+            .Bind(configuration.GetSection(Reviewers.ReviewerAccessOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<Reviewers.ReviewerAccessService>();
         return services;
     }
 }
