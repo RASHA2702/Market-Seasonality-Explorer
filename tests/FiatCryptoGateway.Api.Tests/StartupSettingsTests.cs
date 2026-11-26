@@ -57,6 +57,8 @@ public sealed class StartupSettingsTests
     [InlineData("Gateway:ApiKeys:Clients:0:CheckoutReturnUrl", "http://merchant.example/return")]
     [InlineData("Gateway:Review:Reviewers:0:TotpSecret", "ABCDEFGH")]                          // far shorter than 160 bits
     [InlineData("Gateway:Review:SessionIdleMinutes", "0")]
+    [InlineData("Gateway:Proxy:TrustedNetworks", "0.0.0.0/0")]                                  // trusting everyone lets anyone spoof
+    [InlineData("Gateway:Proxy:TrustedNetworks", "172.30.10.0/24, caddy")]
     [InlineData("Gateway:ApiKeys:Clients:0:DisplayName", " ")]
     [InlineData("Gateway:Settlement:Networks", "polygon,mars")]
     public void InvalidLimitsOrDeliverySettings_StopStartup(string key, string value)

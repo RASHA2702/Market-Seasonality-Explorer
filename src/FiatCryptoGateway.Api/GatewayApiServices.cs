@@ -22,6 +22,7 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddGatewayStorage(configuration);
         services.AddGatewayAuthentication(configuration);
         services.AddReviewerSignInLimit();
+        services.AddProxySupport(configuration);
         services.AddHealthChecks();
         services.ConfigureHttpJsonOptions(options =>
         {

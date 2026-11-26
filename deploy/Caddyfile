@@ -1,0 +1,50 @@
+# The HTTPS front door for the gateway API (Caddy). Set it up with environment variables in .env; see the README,
+# "Run it in containers". Caddy gets and renews certificates by itself: a local one for localhost, or a public
+# one (Let's Encrypt) for a real domain whose DNS points here, with ports 80 and 443 open.
+{
+	admin off
+}
+
+{$GATEWAY_DOMAIN:localhost} {
+	# "internal": Caddy's own local certificate authority, for localhost. An email address: a public certificate,
+	# with that address told about expiry problems.
+	tls {$GATEWAY_TLS:internal}
+
+	header {
+		# 0 for local use; set GATEWAY_HSTS_SECONDS=31536000 once the domain must only ever be reached over HTTPS.
+		Strict-Transport-Security "max-age={$GATEWAY_HSTS_SECONDS:0}"
+		-Server
+	}
+
+	request_body {
+		max_size 1MB
+	}
+
+	# The reviewer console and review API answer only from these networks (by default private ones: this machine,
+	# an office network or a VPN). Anyone else gets 404, as if they were not there. Example for one office address
+	# and a VPN: GATEWAY_REVIEW_FROM="203.0.113.10/32 10.8.0.0/16".
+	@review_elsewhere {
+		path /review /review/* /v1/review /v1/review/*
+		not client_ip {$GATEWAY_REVIEW_FROM:private_ranges}
+	}
+	respond @review_elsewhere 404
+
+	# Caddy replaces any X-Forwarded-For a client sends with the address it really sees. The API trusts that header
+	# only from this proxy's address, and uses it for per-client limits.
+	reverse_proxy api:8080 {
+		health_uri /health
+		health_interval 15s
+		health_timeout 5s
+	}
+
+	# Access log on stdout. A checkout link is the customer's only credential, so it is not written down.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp ^/checkout/[^/?]+ /checkout/[link]
+			}
+		}
+	}
+}

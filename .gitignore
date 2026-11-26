@@ -9,6 +9,7 @@ TestResults/
 .env
 .env.*
 !.env.example
+gateway.env
 appsettings.*.local.json
 secrets/
 *.pfx

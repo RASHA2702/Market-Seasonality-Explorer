@@ -27,7 +27,8 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Reviewer console | One page at `/review` for the compliance officer: held payments to decide, frozen payments to release, wallets to review, reconciliation differences, notifications that failed, and whether the ledger balances. Reviewers sign in with their own username, password and a code from an authenticator app; the session lives only in the page's memory and ends after 30 minutes without activity. |
 | Reviewer sign-in | One account per person, with two-factor authentication (a password and a 6-digit authenticator code, each code usable once). Five failures in a row pause sign-in for 15 minutes; sign-in requests are rate-limited per address. Sessions end on sign-out, after 30 idle minutes or 12 hours, or when the account changes. Every sign-in, failure and sign-out is logged, and the console tells a reviewer about failed attempts since their last visit. A setup command creates the account's settings and shows the authenticator QR code. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 424 .NET tests (23 of them against a real PostgreSQL in Docker), 47 database constraint tests, and a secret scan, run on every push. |
+| Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
+| Tests and CI | 430 .NET tests (23 of them against a real PostgreSQL in Docker), 47 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -343,6 +344,64 @@ publishes its report from its own records, so a payment made with `/v1/sandbox/o
 records are kept in memory: after a restart with PostgreSQL storage, payments from before the restart show as
 `MISSING_IN_REPORT`. A real provider's reports do not forget.
 
+## Run it in containers, behind HTTPS
+
+Docker with Compose runs PostgreSQL, the API and an HTTPS proxy (Caddy) together. The API's container is never
+published directly: everything goes through the proxy, which also redirects plain HTTP to HTTPS.
+
+1. Settings, in two files that are never committed:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   ```bash
+   cp gateway.env.example gateway.env
+   ```
+
+   In `.env`, choose a database password. In `gateway.env`, put your merchant key's hash (step 1 of "Run it
+   locally"), a checkout link secret (`openssl rand -hex 32`), and the four lines the reviewer setup command
+   printed, without `export`. The API refuses to start while a placeholder is left in.
+
+2. Build and start:
+
+   ```bash
+   docker compose --profile gateway up -d --build --wait
+   ```
+
+3. Open <https://localhost/review>. The certificate comes from Caddy's own local authority, so the browser warns
+   about it the first time. To have this machine trust it, copy it out and add it to your system's trusted
+   certificates (on macOS, open the file in Keychain Access and mark it trusted):
+
+   ```bash
+   docker compose --profile gateway cp proxy:/data/caddy/pki/authorities/local/root.crt caddy-local-root.crt
+   ```
+
+4. Check the whole setup from outside, as CI does on every push:
+
+   ```bash
+   ./deploy/smoke-test.sh
+   ```
+
+`docker compose --profile gateway down` stops everything; the database and certificates stay in Docker volumes
+(`down --volumes` deletes them). `docker compose up -d` without the profile still starts only PostgreSQL, for
+running the API with `dotnet run`.
+
+What runs:
+
+| Container | Reachable from | Notes |
+|---|---|---|
+| `proxy` (Caddy 2.10) | `127.0.0.1:80` and `:443` on this machine (`GATEWAY_BIND`, `GATEWAY_HTTP_PORT`, `GATEWAY_HTTPS_PORT`) | Terminates TLS, adds HSTS, limits request bodies to 1 MB, answers `/review` and `/v1/review` only from `GATEWAY_REVIEW_FROM` (private networks by default) and keeps checkout links out of its access log. |
+| `api` | The proxy only | Non-root, read-only file system, no Linux capabilities. Trusts `X-Forwarded-For` only from the proxy's fixed address, so sign-in limits apply per real client. |
+| `postgres` | The API, and `127.0.0.1:5433` for your own tools | Its network with the API has no way out to the internet. |
+
+On a server, with your domain's DNS pointing at it and ports 80 and 443 open, set in `.env`:
+`GATEWAY_DOMAIN=<your domain>`, `GATEWAY_TLS=<an email address for certificate notices>` (Caddy then gets a
+public certificate from Let's Encrypt and renews it), `GATEWAY_BIND=0.0.0.0`, and `GATEWAY_REVIEW_FROM=<your
+office or VPN ranges>`. Once the site must only ever be reached over HTTPS, set `GATEWAY_HSTS_SECONDS=31536000`.
+On a real server, keep the values from `gateway.env` in the hosting platform's secret store, and back up the
+database volume. The gateway is still sandbox-only there: it refuses to start in any other mode.
+
 ## API
 
 | Method and path | Purpose |
@@ -406,5 +465,6 @@ for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app P
 | `src/FiatCryptoGateway.Persistence.Postgres` | PostgreSQL stores, cross-instance order locks, and the migration runner. |
 | `src/FiatCryptoGateway.Api` | HTTP API, API-key and reviewer-session authentication, the checkout page, the reviewer console, background workers. |
 | `src/FiatCryptoGateway.ReviewerSetup` | The command that creates a reviewer account's settings and authenticator QR code. |
+| `Dockerfile`, `docker-compose.yml`, `deploy/` | The container image, the database + API + HTTPS proxy stack, the proxy's configuration (`deploy/Caddyfile`) and the container smoke test. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md) and the [partner integration design](docs/partner-integration.md). |

@@ -22,6 +22,16 @@ explicit change to this policy.
   a 5-minute replay window; several signatures may be active during rotation.
 - In any deployed environment, keep secrets in a managed secret store, not in files.
 
+## Running it
+
+- Run the API only behind the HTTPS proxy (`docker compose --profile gateway`), never published directly. Set
+  `Gateway:Proxy:TrustedNetworks` to the proxy's address only; never to a whole public range or `0.0.0.0/0` (startup
+  refuses that).
+- Keep `/review` and `/v1/review` limited to your office or VPN networks with `GATEWAY_REVIEW_FROM`.
+- Raise the pinned image versions (Dockerfile, docker-compose.yml) regularly to pick up security fixes, and rebuild.
+- Keep `.env` and `gateway.env` out of version control (both are ignored); on a server, use the platform's secret
+  store instead.
+
 ## Data
 
 - Store references to KYC results, not identity documents; those stay with the KYC provider.

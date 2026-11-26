@@ -1,0 +1,22 @@
+# Only what the API image needs goes to the build: src/, db/migrations/ and the build settings.
+**/bin/
+**/obj/
+**/TestResults/
+.git/
+.github/
+.vs/
+.vscode/
+.idea/
+**/*.user
+docs/
+tests/
+deploy/
+db/tests/
+# Local settings and secrets never enter an image.
+.env
+.env.*
+gateway.env
+secrets/
+*.pfx
+*.key
+*.pem

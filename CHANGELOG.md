@@ -1,5 +1,19 @@
 # Change log
 
+## 2026-11-26 — Container image and HTTPS proxy
+
+- `docker compose --profile gateway up -d --build --wait` starts PostgreSQL, the API in a container and an HTTPS
+  proxy (Caddy) in front of it. Caddy gets and renews certificates by itself (a local authority for localhost, Let's
+  Encrypt for a real domain), redirects HTTP, sets HSTS, caps request sizes, keeps checkout links out of its log, and
+  answers the reviewer console and review API only from configured networks (private ones by default).
+- The image runs on Microsoft's chiseled runtime with time zone data: no shell, non-root, read-only file system, no
+  Linux capabilities, versions pinned. It checks its own health with `--health-check`.
+- New setting `Gateway:Proxy:TrustedNetworks`: the API takes a client's address from `X-Forwarded-For` only when the
+  request comes from these networks, so sign-in limits apply per real client and cannot be dodged by sending the
+  header. Without it the header is ignored.
+- `deploy/smoke-test.sh` checks a running stack from outside; CI builds the image, starts the stack and runs it on
+  every push.
+
 ## 2026-11-26 — Reviewer sign-in with two-factor authentication
 
 - Reviewers now have their own accounts and sign in with a password and a 6-digit code from an authenticator app.

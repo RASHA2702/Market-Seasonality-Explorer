@@ -230,12 +230,19 @@ wallet-screening interface.
 ### 22. Customer experience, brand name and domain
 **ANSWERED** (part): a hosted checkout page plus an API for merchants (question 2).
 - Brand name and domain: **OPEN**. The checkout page shows the merchant's name and no gateway brand yet; once a
-  domain is chosen, it becomes `Gateway:Checkout:BaseUrl`.
+  domain is chosen, it becomes `GATEWAY_DOMAIN` for the HTTPS proxy, which then gets its certificate by itself, and
+  the checkout links use it.
 
 ### 23. Hosting (cloud, region, budget)
 **ANSWERED**: "for now locally but we would have to scale up in the future if needed."
 - **PROPOSED**: run locally with Docker Compose. When you move to the cloud, choose a region in India
   (see question 9).
+- Built (2026-11-26): the API as a container image, started with PostgreSQL behind an HTTPS proxy (Caddy) by one
+  command, checked end to end in CI. The same setup runs on a single server once a domain points at it. Still
+  **OPEN**: which provider and region, and whether to use its managed database and secret store (recommended for
+  real money) instead of the database container and a settings file.
+- **[Lawyer]** Whether payment and personal data must be stored in India, and what that means for the hosting and
+  backup locations (see question 9).
 
 ### 24. Confirm the stack (.NET 10 + PostgreSQL)
 **ANSWERED** (you asked me to decide): keep .NET 10 and PostgreSQL. The gateway is already built and tested

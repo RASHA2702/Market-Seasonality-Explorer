@@ -62,6 +62,31 @@ jobs:
             psql --no-psqlrc --quiet --set ON_ERROR_STOP=1 --file "$test"
           done
 
+  container:
+    name: Container image and HTTPS proxy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway settings for this run
+        run: |
+          umask 077
+          printf 'POSTGRES_DB=gateway\nPOSTGRES_USER=gateway_app\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env
+          {
+            echo "Gateway__ApiKeys__Clients__0__ClientId=ci-merchant"
+            echo "Gateway__ApiKeys__Clients__0__KeySha256=$(openssl rand -hex 32 | sha256sum | cut -d' ' -f1)"
+            echo "Gateway__Checkout__LinkSecret=$(openssl rand -hex 32)"
+          } > gateway.env
+      - name: Build the image and start database, API and proxy
+        run: docker compose --profile gateway up --detach --build --wait
+      - name: Check everything through the HTTPS proxy
+        run: ./deploy/smoke-test.sh
+      - name: Container logs
+        if: failure()
+        run: docker compose --profile gateway logs --no-color
+      - name: Stop and remove the throwaway data
+        if: always()
+        run: docker compose --profile gateway down --volumes
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest

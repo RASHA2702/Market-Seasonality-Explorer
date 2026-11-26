@@ -291,6 +291,29 @@ The schema enforces in the database what the domain enforces in code:
 - a quote backs one order, a provider payment settles one order, quote figures add up.
 
 
+## Deployment
+
+The container setup (`Dockerfile`, `docker-compose.yml`, `deploy/`) puts the API behind an HTTPS proxy:
+
+- **Image.** Built from source with the .NET SDK and run on Microsoft's chiseled ASP.NET Core runtime with time zone
+  and culture data (`-chiseled-extra`): no shell or package manager, a non-root user. Image versions are pinned and
+  should be raised regularly for security fixes. The container's file system is read-only and it holds no Linux
+  capabilities. Its health check runs the API's own `--health-check` mode, which asks `/health` on the local port.
+- **Proxy.** Caddy terminates TLS with certificates it obtains and renews itself (a local authority for localhost,
+  Let's Encrypt for a domain), redirects HTTP to HTTPS, sets HSTS, removes its `Server` header, caps request bodies
+  at 1 MB, and answers the reviewer console and review API only from `GATEWAY_REVIEW_FROM` (private networks by
+  default). Its access log replaces checkout links, which are customers' credentials, with `/checkout/[link]`;
+  authorisation headers are never logged. Responses are not compressed, so no secret shares a compressed response
+  with attacker-chosen text.
+- **Client addresses.** Behind the proxy every connection comes from the proxy. The proxy overwrites any
+  `X-Forwarded-For` a client sends with the address it saw, and the API reads that header only from addresses in
+  `Gateway:Proxy:TrustedNetworks` (the proxy's fixed address in Compose), using only the last entry. With no trusted
+  networks configured the API ignores the header entirely; ASP.NET Core would otherwise trust every sender when its
+  lists are empty. The sign-in limit therefore counts each real client separately, and no client can pose as another.
+- **Networks.** The proxy and API share one network, which can reach the internet (for merchant webhooks). The API
+  and database share another with no outside access. The API is not published on the host; the database is, on
+  127.0.0.1 only, for local tools.
+
 ## Deliberately not built yet
 
 - Off-ramp (crypto → fiat).
