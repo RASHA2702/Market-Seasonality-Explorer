@@ -16,8 +16,8 @@ jobs:
     name: .NET build and tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - run: dotnet restore FiatCryptoGateway.sln
@@ -49,7 +49,7 @@ jobs:
       PGUSER: gateway_ci
       PGPASSWORD: ci-only-throwaway
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Apply migrations
         run: ./db/migrate.sh
       - name: Re-running migrations is a no-op
@@ -66,7 +66,7 @@ jobs:
     name: Container image and HTTPS proxy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Throwaway settings and keys for this run
         run: |
           umask 077
@@ -102,9 +102,9 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
