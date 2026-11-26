@@ -16,6 +16,9 @@ db/tests/
 .env
 .env.*
 gateway.env
+backup.env
+backups/
+backup-key*
 secrets/
 *.pfx
 *.key

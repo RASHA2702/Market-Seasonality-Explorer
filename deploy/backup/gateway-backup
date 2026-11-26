@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# One backup of the gateway database:
+#   1. dump it (PostgreSQL custom format: compressed, one consistent snapshot);
+#   2. prove the dump is usable by restoring it into a scratch database and checking it;
+#   3. encrypt it to the age public keys in BACKUP_AGE_RECIPIENTS (the private key is never on this server);
+#   4. record a checksum, delete local backups older than BACKUP_KEEP_DAYS, and copy new ones off-site if
+#      BACKUP_COPY_TO names an rclone destination.
+# The unencrypted dump only ever exists in /tmp, which is memory in the container. Needs PGHOST, PGDATABASE,
+# PGUSER and PGPASSWORD.
+set -euo pipefail
+umask 077
+
+: "${PGDATABASE:?PGDATABASE is not set}" "${PGUSER:?PGUSER is not set}" "${PGPASSWORD:?PGPASSWORD is not set}"
+dir="${BACKUP_DIR:-/backups}"
+keep_days="${BACKUP_KEEP_DAYS:-14}"
+verify_sql=/usr/local/share/gateway-backup/verify.sql
+check_db="${PGDATABASE}_restore_check"
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+name="gateway-${stamp}.dump.age"
+scratch="$(mktemp -d)"
+
+log() { echo "$(date -u +%FT%TZ) backup: $*"; }
+fail() { echo "$(date -u +%FT%TZ) backup: $*" >&2; exit 1; }
+
+finish() {
+  local status=$?
+  rm -rf -- "${scratch:?}"
+  psql -qX -d postgres -c "DROP DATABASE IF EXISTS \"${check_db}\"" >/dev/null 2>&1 || true
+  if (( status == 0 )); then
+    rm -f /tmp/backup-failed
+  else
+    date +%s > /tmp/backup-failed
+    log "FAILED (exit ${status}); no backup was saved this time" >&2
+  fi
+}
+trap finish EXIT
+
+recipients=()
+for key in ${BACKUP_AGE_RECIPIENTS//,/ }; do
+  [[ "$key" == age1* ]] || fail "BACKUP_AGE_RECIPIENTS must hold age public keys (age1...); see README, Database backups"
+  recipients+=(--recipient "$key")
+done
+(( ${#recipients[@]} > 0 )) || fail "set BACKUP_AGE_RECIPIENTS to the age public key backups are encrypted to (README, Database backups)"
+[[ "$keep_days" =~ ^[0-9]+$ ]] && (( keep_days >= 1 )) || fail "BACKUP_KEEP_DAYS must be a whole number of days, at least 1"
+mkdir -p "$dir"
+find "$dir" -maxdepth 1 -name 'gateway-*.partial' -type f -delete   # left by an interrupted run
+
+# Rows are only ever added to these tables, so a complete dump holds at least as many as there were when it started
+# and at most as many as when it finished.
+tables=(ledger.journal_entry ledger.journal_line gateway.order_event gateway.review_action
+        gateway.settlement_wallet_action ops.reviewer_access_event ops.reconciliation_run ops.schema_migration)
+count_rows() {
+  local query="" table
+  for table in "${tables[@]}"; do query+="${query:+ UNION ALL }SELECT (SELECT count(*) FROM ${table})"; done
+  psql -qXAt -d "$1" -c "$query" | paste -sd' '
+}
+
+before="$(count_rows "$PGDATABASE")"
+pg_dump --format=custom --no-password --file="$scratch/backup.dump" "$PGDATABASE"
+after="$(count_rows "$PGDATABASE")"
+log "dumped ${PGDATABASE} ($(stat -c %s "$scratch/backup.dump") bytes); checking it in a scratch database"
+
+PGOPTIONS="-c client_min_messages=warning" psql -qX -d postgres -c "DROP DATABASE IF EXISTS \"${check_db}\"" >/dev/null
+psql -qX -d postgres -c "CREATE DATABASE \"${check_db}\"" >/dev/null
+pg_restore --no-owner --no-privileges --exit-on-error --dbname="$check_db" "$scratch/backup.dump"
+psql -qX -v ON_ERROR_STOP=1 -d "$check_db" -f "$verify_sql" 2>&1 | sed 's/^psql:[^ ]* NOTICE:  /  /'
+restored="$(count_rows "$check_db")"
+read -r -a was <<< "$before"
+read -r -a then <<< "$after"
+read -r -a got <<< "$restored"
+for i in "${!tables[@]}"; do
+  (( got[i] >= was[i] && got[i] <= then[i] )) ||
+    fail "the restored copy has ${got[i]} rows in ${tables[i]}; the database had ${was[i]} to ${then[i]}"
+done
+schema="$(psql -qXAt -d "$check_db" -c 'SELECT max(version) FROM ops.schema_migration')"
+
+age "${recipients[@]}" --output "$scratch/$name" "$scratch/backup.dump"
+rm -f -- "$scratch/backup.dump"
+sha256="$(sha256sum "$scratch/$name" | cut -d' ' -f1)"
+bytes="$(stat -c %s "$scratch/$name")"
+mv -- "$scratch/$name" "$dir/$name.partial"
+mv -- "$dir/$name.partial" "$dir/$name"
+printf '{"file":"%s","createdAt":"%s","bytes":%s,"sha256":"%s","schema":"%s","restoreChecked":true}\n' \
+  "$name" "$(date -u +%FT%TZ)" "$bytes" "$sha256" "$schema" > "$dir/${name%.dump.age}.json"
+date +%s > "$dir/.last-success"
+log "saved ${name} (${bytes} bytes, schema ${schema}); restore check passed"
+
+find "$dir" -maxdepth 1 -name 'gateway-*' -type f -mtime +"$keep_days" -print -delete | sed 's/^/  deleted old backup: /'
+
+if [[ -n "${BACKUP_COPY_TO:-}" ]]; then
+  rclone copy --max-depth 1 --include 'gateway-*' "$dir" "$BACKUP_COPY_TO"
+  log "copied to ${BACKUP_COPY_TO%%:*} (off-site)"
+fi

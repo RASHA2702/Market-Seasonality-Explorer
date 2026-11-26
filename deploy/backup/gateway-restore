@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Restores an encrypted backup into a NEW database and checks it. It never touches the live database, so it serves
+# both for restore drills and, followed by switching the API over, for a real recovery (README, Database backups).
+#
+#   gateway-restore <backup file> [new database name]
+#
+# The private key must be mounted at /run/secrets/backup-key (or named by BACKUP_IDENTITY_FILE). Needs PGHOST,
+# PGDATABASE (the live database's name, which is refused as a target), PGUSER and PGPASSWORD.
+set -euo pipefail
+umask 077
+
+fail() { echo "restore: $*" >&2; exit 1; }
+
+file="${1:?Name the backup to restore, for example gateway-20261126T210000Z.dump.age}"
+target="${2:-${PGDATABASE}_restored_$(date -u +%Y%m%d_%H%M%S)}"
+key="${BACKUP_IDENTITY_FILE:-/run/secrets/backup-key}"
+dir="${BACKUP_DIR:-/backups}"
+[[ "$file" == */* ]] || file="$dir/$file"
+
+[[ -f "$file" ]] || fail "no backup at $file"
+[[ -f "$key" ]] || fail "no private key at $key; add: -v /path/to/backup-key.txt:/run/secrets/backup-key:ro"
+[[ "$target" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || fail "the new database name may use lowercase letters, digits and _ only"
+[[ "$target" != "$PGDATABASE" ]] || fail "refusing to restore over the live database $PGDATABASE; choose a new name"
+if [[ -n "$(psql -qXAt -d postgres -c "SELECT 1 FROM pg_database WHERE datname = '$target'")" ]]; then
+  fail "database $target already exists; choose a new name"
+fi
+
+manifest="${file%.dump.age}.json"
+if [[ -f "$manifest" ]]; then
+  expected="$(sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$manifest")"
+  [[ "$(sha256sum "$file" | cut -d' ' -f1)" == "$expected" ]] || fail "$file does not match its recorded checksum: it is damaged or was changed"
+  echo "restore: checksum matches $(basename "$manifest")"
+fi
+
+scratch="$(mktemp -d)"
+trap 'rm -rf -- "${scratch:?}"' EXIT
+age --decrypt --identity "$key" --output "$scratch/backup.dump" "$file" ||
+  fail "could not decrypt $file with this key (wrong key, or the file is damaged)"
+
+psql -qX -d postgres -c "CREATE DATABASE \"${target}\"" >/dev/null
+if ! pg_restore --no-owner --no-privileges --exit-on-error --dbname="$target" "$scratch/backup.dump"; then
+  fail "the restore into $target failed; drop it with: DROP DATABASE \"$target\""
+fi
+psql -qX -v ON_ERROR_STOP=1 -d "$target" -f /usr/local/share/gateway-backup/verify.sql 2>&1 | sed 's/^psql:[^ ]* NOTICE:  /  /'
+
+cat <<EOF
+restore: restored $(basename "$file") into database $target and checked it.
+  After a drill, remove it:   DROP DATABASE "$target";
+  To recover with it: stop the API, set Database=$target in its connection string (or rename the databases), then
+  start the API again.
+EOF

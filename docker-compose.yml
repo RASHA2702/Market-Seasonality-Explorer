@@ -77,6 +77,47 @@ services:
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
+  # Encrypted database backups (deploy/backup): every night at BACKUP_AT, and once at start.
+  backup:
+    profiles: [gateway]
+    build: deploy/backup
+    image: fiat-crypto-gateway-backup:local
+    init: true   # passes stop signals on, so a stop never waits out a sleeping schedule
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      # The age public key(s) backups are encrypted to. The private key stays off this server.
+      BACKUP_AGE_RECIPIENTS: ${BACKUP_AGE_RECIPIENTS:-}
+      BACKUP_AT: ${BACKUP_AT:-02:30}
+      BACKUP_TIME_ZONE: ${BACKUP_TIME_ZONE:-Asia/Kolkata}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_COPY_TO: ${BACKUP_COPY_TO:-}
+      HOME: /tmp
+    # Off-site storage credentials for rclone (RCLONE_CONFIG_...), if BACKUP_COPY_TO is set.
+    env_file:
+      - path: backup.env
+        required: false
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [default, data]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "gateway-backup-health"]
+      interval: 60s
+      timeout: 10s
+      start_period: 5m
+      start_interval: 5s
+    restart: unless-stopped
+
 networks:
   # Proxy and API. The API reaches merchants' webhook endpoints from here.
   edge:

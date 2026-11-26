@@ -67,19 +67,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Throwaway settings for this run
+      - name: Throwaway settings and keys for this run
         run: |
           umask 077
+          merchant_key="$(openssl rand -hex 32)"
+          echo "$merchant_key" > ci-merchant-key
           printf 'POSTGRES_DB=gateway\nPOSTGRES_USER=gateway_app\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env
           {
             echo "Gateway__ApiKeys__Clients__0__ClientId=ci-merchant"
-            echo "Gateway__ApiKeys__Clients__0__KeySha256=$(openssl rand -hex 32 | sha256sum | cut -d' ' -f1)"
+            echo "Gateway__ApiKeys__Clients__0__KeySha256=$(printf '%s' "$merchant_key" | sha256sum | cut -d' ' -f1)"
             echo "Gateway__Checkout__LinkSecret=$(openssl rand -hex 32)"
+            echo "Gateway__Settlement__CoolingOffHours=0"
           } > gateway.env
-      - name: Build the image and start database, API and proxy
+          # A throwaway backup key, and a local folder standing in for off-site storage.
+          docker compose --profile gateway build backup
+          docker compose --profile gateway run --rm --no-deps -T backup age-keygen > backup-key.txt
+          echo "BACKUP_AGE_RECIPIENTS=$(sed -n 's/^# public key: //p' backup-key.txt)" >> .env
+          echo "BACKUP_COPY_TO=offsite:/backups/offsite-copy" >> .env
+          echo "RCLONE_CONFIG_OFFSITE_TYPE=local" > backup.env
+      - name: Build the image and start database, API, proxy and backups
         run: docker compose --profile gateway up --detach --build --wait
       - name: Check everything through the HTTPS proxy
         run: ./deploy/smoke-test.sh
+      - name: Back up, then restore the encrypted copy and compare
+        run: SMOKE_MERCHANT_KEY="$(cat ci-merchant-key)" BACKUP_TEST_KEY="$PWD/backup-key.txt" ./deploy/backup/test-backup.sh
       - name: Container logs
         if: failure()
         run: docker compose --profile gateway logs --no-color

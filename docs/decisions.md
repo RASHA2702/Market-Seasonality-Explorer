@@ -241,8 +241,14 @@ wallet-screening interface.
   command, checked end to end in CI. The same setup runs on a single server once a domain points at it. Still
   **OPEN**: which provider and region, and whether to use its managed database and secret store (recommended for
   real money) instead of the database container and a settings file.
+- Built (2026-11-26): nightly encrypted database backups, each restored and checked before it is kept, with a
+  restore command for drills and recovery and an optional off-site copy. Still **OPEN**: where off-site copies go
+  (part of choosing the provider), and point-in-time recovery from a managed database.
 - **[Lawyer]** Whether payment and personal data must be stored in India, and what that means for the hosting and
   backup locations (see question 9).
+- **[Lawyer]** How long backups may and must be kept: records you must keep for years versus personal data you
+  must not keep longer than needed. Backups are deleted on this server after 14 days; off-site retention is set at
+  the storage provider.
 
 ### 24. Confirm the stack (.NET 10 + PostgreSQL)
 **ANSWERED** (you asked me to decide): keep .NET 10 and PostgreSQL. The gateway is already built and tested

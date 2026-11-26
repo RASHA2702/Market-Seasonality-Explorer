@@ -1,5 +1,17 @@
 # Change log
 
+## 2026-11-26 — Encrypted database backups
+
+- A `backup` container in the Compose stack backs up the database every night at 02:30 India time and once at
+  start. Each dump is restored into a scratch database and checked (balanced ledger, whole journal entries, schema,
+  append-only protections, no missing rows) before it is kept, then encrypted with age to `BACKUP_AGE_RECIPIENTS`;
+  the private key stays off the server. Checksums are recorded, local copies pruned after 14 days, and new ones
+  optionally copied off-site with rclone (`BACKUP_COPY_TO`).
+- `gateway-restore` restores a backup into a new database and checks it, for drills and recovery; it refuses the
+  live database, an existing database, a wrong key and a damaged or altered file.
+- The container is unhealthy after a failed backup or 26 hours without a success. CI makes a paid order, backs up,
+  restores with a throwaway key and compares the copy with the live database.
+
 ## 2026-11-26 — Container image and HTTPS proxy
 
 - `docker compose --profile gateway up -d --build --wait` starts PostgreSQL, the API in a container and an HTTPS

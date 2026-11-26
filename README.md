@@ -28,6 +28,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Reviewer sign-in | One account per person, with two-factor authentication (a password and a 6-digit authenticator code, each code usable once). Five failures in a row pause sign-in for 15 minutes; sign-in requests are rate-limited per address. Sessions end on sign-out, after 30 idle minutes or 12 hours, or when the account changes. Every sign-in, failure and sign-out is logged, and the console tells a reviewer about failed attempts since their last visit. A setup command creates the account's settings and shows the authenticator QR code. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
 | Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
+| Database backups | Every night (and at start), the database is dumped, restored into a scratch database and checked (the ledger balances, nothing is missing), then encrypted to a key you keep off the server. Old local copies are pruned; new ones can be copied off-site. A restore command recovers any backup into a new database, never over the live one. CI backs up, restores and compares on every push. |
 | Tests and CI | 430 .NET tests (23 of them against a real PostgreSQL in Docker), 47 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
@@ -402,6 +403,64 @@ office or VPN ranges>`. Once the site must only ever be reached over HTTPS, set 
 On a real server, keep the values from `gateway.env` in the hosting platform's secret store, and back up the
 database volume. The gateway is still sandbox-only there: it refuses to start in any other mode.
 
+### Database backups
+
+The `backup` container backs up the database every night at 02:30 India time, and once whenever it starts. Each
+backup is restored into a scratch database and checked (the ledger balances, every journal entry is whole, the
+append-only protections are in place, and no rows are missing) before it is kept. It is then encrypted with
+[age](https://age-encryption.org) to your public key, so a copy on this server, or anywhere else, can only be read
+with the private key that you keep elsewhere.
+
+1. On your own computer, make the key pair (install age with `brew install age`, `apt install age` or
+   `winget install FiloSottile.age`):
+
+   ```bash
+   age-keygen -o backup-key.txt
+   ```
+
+   Keep `backup-key.txt` off the server: in your password manager, and printed in a safe place. Without it no
+   backup can ever be read, by you or anyone else. A second key for a second trusted person can be added later.
+
+2. Put the public key (the `age1...` line it printed) in `.env`, then start or restart the stack:
+
+   ```bash
+   BACKUP_AGE_RECIPIENTS=age1...
+   ```
+
+Backups land in `./backups` (`BACKUP_DIR`), with a checksum file each, and are deleted there after 14 days
+(`BACKUP_KEEP_DAYS`). `docker compose --profile gateway ps backup` shows `unhealthy` if the last backup failed or
+none has succeeded for 26 hours, and the container's log says why. To back up at once:
+
+```bash
+docker compose --profile gateway exec backup gateway-backup
+```
+
+**Restore drill (monthly is reasonable).** This restores a backup into a new database, checks it, and never
+touches the live one:
+
+```bash
+docker compose --profile gateway run --rm -v "$PWD/backup-key.txt:/run/secrets/backup-key:ro" backup gateway-restore gateway-20261126T210000Z.dump.age
+```
+
+It prints the new database's name and how to remove it afterwards. In a real recovery, stop the API, point its
+connection string at the restored database (or rename the databases), and start it again. Anything after the
+backup's time is not in it; for real money, add the managed database's continuous point-in-time recovery as well.
+
+**Off-site copies.** A backup on the same disk as the database does not survive losing that disk. Set
+`BACKUP_COPY_TO` to an [rclone](https://rclone.org) destination, such as S3-compatible storage in an India region,
+and put its credentials in `backup.env` (never committed), for example:
+
+```bash
+RCLONE_CONFIG_OFFSITE_TYPE=s3
+RCLONE_CONFIG_OFFSITE_PROVIDER=AWS
+RCLONE_CONFIG_OFFSITE_REGION=ap-south-1
+RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID=<from your storage provider>
+RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY=<from your storage provider>
+```
+
+with `BACKUP_COPY_TO=offsite:<bucket>/gateway` in `.env`. Copies are only ever added there; set how long the
+storage keeps them with its own retention rules.
+
 ## API
 
 | Method and path | Purpose |
@@ -465,6 +524,6 @@ for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app P
 | `src/FiatCryptoGateway.Persistence.Postgres` | PostgreSQL stores, cross-instance order locks, and the migration runner. |
 | `src/FiatCryptoGateway.Api` | HTTP API, API-key and reviewer-session authentication, the checkout page, the reviewer console, background workers. |
 | `src/FiatCryptoGateway.ReviewerSetup` | The command that creates a reviewer account's settings and authenticator QR code. |
-| `Dockerfile`, `docker-compose.yml`, `deploy/` | The container image, the database + API + HTTPS proxy stack, the proxy's configuration (`deploy/Caddyfile`) and the container smoke test. |
+| `Dockerfile`, `docker-compose.yml`, `deploy/` | The container image, the database + API + HTTPS proxy + backup stack, the proxy's configuration (`deploy/Caddyfile`), the backup image and scripts (`deploy/backup`), and the container and backup tests. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md) and the [partner integration design](docs/partner-integration.md). |

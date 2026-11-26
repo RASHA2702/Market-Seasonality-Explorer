@@ -10,6 +10,9 @@ TestResults/
 .env.*
 !.env.example
 gateway.env
+backup.env
+backups/
+backup-key*
 appsettings.*.local.json
 secrets/
 *.pfx

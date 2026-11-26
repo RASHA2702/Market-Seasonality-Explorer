@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Runs gateway-backup every day at BACKUP_AT (HH:MM, default 02:30) in BACKUP_TIME_ZONE (default Asia/Kolkata), and
+# once at start unless BACKUP_ON_START=false. A failed backup is logged, marks the container unhealthy, and is tried
+# again at the next scheduled time.
+set -euo pipefail
+
+at="${BACKUP_AT:-02:30}"
+zone="${BACKUP_TIME_ZONE:-Asia/Kolkata}"
+[[ "$at" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || { echo "BACKUP_AT must be a time such as 02:30, not '$at'" >&2; exit 1; }
+[[ -f "/usr/share/zoneinfo/$zone" ]] || { echo "BACKUP_TIME_ZONE '$zone' is not a known time zone, such as Asia/Kolkata" >&2; exit 1; }
+date +%s > /tmp/started
+# Stop promptly when the container is stopped, even while waiting for the next run.
+trap 'echo "$(date -u +%FT%TZ) backup: stopping"; exit 0' TERM INT
+
+run_backup() {
+  gateway-backup || echo "$(date -u +%FT%TZ) backup: the next attempt is at the next scheduled time" >&2
+}
+
+# The database may still be starting, or waiting for the API to create the schema.
+for _ in $(seq 1 90); do
+  psql -qXAt -d "$PGDATABASE" -c 'SELECT 1 FROM ops.schema_migration LIMIT 1' >/dev/null 2>&1 && break
+  sleep 2 & wait $!
+done
+
+if [[ "${BACKUP_ON_START:-true}" == true ]]; then run_backup; fi
+
+while true; do
+  now="$(date +%s)"
+  next="$(TZ="$zone" date -d "today $at" +%s)"
+  (( next > now )) || next="$(TZ="$zone" date -d "tomorrow $at" +%s)"
+  echo "$(date -u +%FT%TZ) backup: next at $(TZ="$zone" date -d "@$next" '+%Y-%m-%d %H:%M %Z')"
+  sleep $(( next - now )) & wait $!
+  run_backup
+done

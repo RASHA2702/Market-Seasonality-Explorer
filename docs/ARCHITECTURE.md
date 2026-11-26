@@ -313,6 +313,14 @@ The container setup (`Dockerfile`, `docker-compose.yml`, `deploy/`) puts the API
 - **Networks.** The proxy and API share one network, which can reach the internet (for merchant webhooks). The API
   and database share another with no outside access. The API is not published on the host; the database is, on
   127.0.0.1 only, for local tools.
+- **Backups.** A separate container (PostgreSQL's client tools at the server's version, age, rclone) dumps the
+  database nightly and at start. The unencrypted dump exists only in memory (`/tmp` is a tmpfs). It is restored into a
+  scratch database and checked before anything is kept: `verify.sql` (balanced ledger, whole journal entries, schema
+  version, append-only triggers present), and, for every append-only table, a row count between the counts taken
+  just before and just after the dump. Only then is it encrypted to the age recipients and saved with a SHA-256
+  manifest. `gateway-restore` checks the manifest, decrypts, restores into a new database (it refuses the live one
+  and any existing one), and runs the same checks. The container is unhealthy after a failed run or 26 hours without
+  a success. Backups are point-in-time snapshots; continuous WAL archiving belongs with the managed database.
 
 ## Deliberately not built yet
 

@@ -31,6 +31,10 @@ explicit change to this policy.
 - Raise the pinned image versions (Dockerfile, docker-compose.yml) regularly to pick up security fixes, and rebuild.
 - Keep `.env` and `gateway.env` out of version control (both are ignored); on a server, use the platform's secret
   store instead.
+- Backups are encrypted to `BACKUP_AGE_RECIPIENTS`. Keep the private backup key off the server (password manager and
+  a printed copy in a safe place). If it may have leaked, make a new key pair, switch the recipients, and treat older
+  backups as readable by whoever has the old key. Practise a restore regularly; a backup never restored is not
+  known to work.
 
 ## Data
 

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# The backup container's health: unhealthy when the last backup failed, or when no backup has succeeded for
+# BACKUP_MAX_AGE_HOURS (default 26) since the container started.
+set -euo pipefail
+
+[[ ! -f /tmp/backup-failed ]] || { echo "the last backup failed; see the container's log"; exit 1; }
+newest=0
+for marker in "${BACKUP_DIR:-/backups}/.last-success" /tmp/started; do
+  if [[ -f "$marker" ]]; then
+    stamp="$(cat "$marker")"
+    (( stamp > newest )) && newest="$stamp"
+  fi
+done
+(( newest > 0 )) || { echo "no backup has succeeded yet"; exit 1; }
+age_seconds=$(( $(date +%s) - newest ))
+(( age_seconds < ${BACKUP_MAX_AGE_HOURS:-26} * 3600 )) || { echo "no successful backup for $(( age_seconds / 3600 )) hours"; exit 1; }
