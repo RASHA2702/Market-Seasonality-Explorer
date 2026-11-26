@@ -1,5 +1,21 @@
 # Change log
 
+## 2026-11-26 — Reviewer sign-in with two-factor authentication
+
+- Reviewers now have their own accounts and sign in with a password and a 6-digit code from an authenticator app.
+  Reviewer API keys are no longer accepted: an API client with `Role=Reviewer` stops the API at startup, with a
+  message pointing to the new setup.
+- `dotnet run --project src/FiatCryptoGateway.ReviewerSetup` creates an account's settings on the reviewer's own
+  computer: it shows the authenticator QR code, checks one code, and prints the username, display name, password hash
+  (PBKDF2-SHA256, 600,000 iterations) and authenticator key to set under `Gateway:Review:Reviewers`.
+- Every failure looks the same; five in a row pause sign-in for 15 minutes; each code works once, across instances;
+  sign-in requests are rate-limited per address. Sessions end on sign-out, after 30 idle minutes or 12 hours, or when
+  the account's settings change. Sign-ins, failures, pauses and sign-outs are logged (append-only with PostgreSQL,
+  migration `010_reviewer_access`), and the console shows the previous sign-in and any failed attempts since.
+- New endpoints: `POST /v1/review/sign-in` and `POST /v1/review/sign-out`. Review decisions are now recorded under
+  the reviewer's username.
+- Fixed: the console showed its Refresh and Sign out buttons before sign-in.
+
 ## 2026-11-26 — Reviewer console
 
 - `/review` is one page for the compliance officer: held payments to approve, reject or freeze and report; frozen

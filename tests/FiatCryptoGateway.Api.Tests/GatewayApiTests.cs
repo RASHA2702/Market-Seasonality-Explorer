@@ -27,12 +27,11 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     public void Advance(TimeSpan by) => _now += by;
 }
 
-/// <summary>The real API host with two sandbox clients. Keys here are test-only values, not secrets.</summary>
+/// <summary>The real API host with two sandbox merchants and a reviewer. Keys here are test-only values, not secrets.</summary>
 public sealed class GatewayApiFactory : WebApplicationFactory<Program>
 {
     public const string ClientAKey = "test-only-key-client-a";
     public const string ClientBKey = "test-only-key-client-b";
-    public const string ReviewerKey = "test-only-key-reviewer";
 
     public ManualTimeProvider Time { get; } = new(new DateTimeOffset(2026, 11, 24, 12, 0, 0, TimeSpan.Zero));
 
@@ -51,9 +50,11 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Gateway:ApiKeys:Clients:0:KeySha256", Sha256Hex(ClientAKey));
         builder.UseSetting("Gateway:ApiKeys:Clients:1:ClientId", "client-b");
         builder.UseSetting("Gateway:ApiKeys:Clients:1:KeySha256", Sha256Hex(ClientBKey));
-        builder.UseSetting("Gateway:ApiKeys:Clients:2:ClientId", "compliance-officer");
-        builder.UseSetting("Gateway:ApiKeys:Clients:2:KeySha256", Sha256Hex(ReviewerKey));
-        builder.UseSetting("Gateway:ApiKeys:Clients:2:Role", "Reviewer");
+        foreach (var (key, value) in TestReviewer.Settings)
+        {
+            builder.UseSetting(key, value);
+        }
+
         builder.UseSetting("Gateway:Processing:Enabled", "false");
         builder.UseSetting("Gateway:Webhooks:Enabled", "false"); // tests send notifications by calling the dispatcher
         builder.UseSetting("Gateway:Reconciliation:Enabled", "false"); // tests start runs through the API
@@ -107,8 +108,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         });
         using var merchant = host.CreateClient();
         merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
-        using var reviewer = host.CreateClient();
-        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        using var reviewer = await host.SignInReviewerAsync();
         var quote = await CreateQuoteAsync(merchant);
         using var created = await SendOrderAsync(
             merchant, quote.QuoteId, Guid.NewGuid().ToString(), wallet: SandboxWalletScreening.HighRiskAddress, reviewer: reviewer);
@@ -165,8 +165,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         using var host = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(clock)));
         using var merchant = host.CreateClient();
         merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
-        using var reviewer = host.CreateClient();
-        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        using var reviewer = await host.SignInReviewerAsync();
         var paid = await CreateOrderAsync(merchant, (await CreateQuoteAsync(merchant)).QuoteId, Guid.NewGuid().ToString());
         await PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{paid.OrderId}/pay", new { });
         var lost = await CreateOrderAsync(merchant, (await CreateQuoteAsync(merchant)).QuoteId, Guid.NewGuid().ToString());
@@ -177,18 +176,19 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         Assert.Equal(HttpStatusCode.UnprocessableEntity, tooEarly.StatusCode);
         Assert.Equal("DAY_NOT_FINISHED", (await tooEarly.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
 
-        clock.Advance(TimeSpan.FromHours(13)); // 06:30 IST the next day
-        var run = Assert.Single(await PostAsync<List<ReconciliationRunResponse>>(reviewer, "/v1/review/reconciliation/runs", new { day = "2026-11-24" }));
+        clock.Advance(TimeSpan.FromHours(13)); // 06:30 IST the next day: a new session
+        using var nextMorning = await host.SignInReviewerAsync();
+        var run = Assert.Single(await PostAsync<List<ReconciliationRunResponse>>(nextMorning, "/v1/review/reconciliation/runs", new { day = "2026-11-24" }));
 
         Assert.Equal(("sandbox-fiat", "2026-11-24", 2, 1, false), (run.Provider, run.Day, run.ReportLines, run.Matched, run.Clean));
         var discrepancy = Assert.Single(run.Discrepancies);
         Assert.Equal(
             ("MISSING_IN_LEDGER", "FIAT_RECEIVED", (Guid?)lost.OrderId, "10000.00", "INR", (string?)null),
             (discrepancy.Type, discrepancy.Kind, discrepancy.OrderId, discrepancy.ReportAmount, discrepancy.ReportAsset, discrepancy.LedgerAmount));
-        var listed = await reviewer.GetFromJsonAsync<List<ReconciliationRunResponse>>("/v1/review/reconciliation/runs?day=2026-11-24");
+        var listed = await nextMorning.GetFromJsonAsync<List<ReconciliationRunResponse>>("/v1/review/reconciliation/runs?day=2026-11-24");
         Assert.Equal(run.RunId, Assert.Single(listed!).RunId);
 
-        using var badDay = await reviewer.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "24/11/2026" });
+        using var badDay = await nextMorning.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "24/11/2026" });
         Assert.Equal("INVALID_DAY", (await badDay.Content.ReadFromJsonAsync<ErrorResponse>())!.Error.Code);
         using var merchantRun = await merchant.PostAsJsonAsync(new Uri("/v1/review/reconciliation/runs", UriKind.Relative), new { day = "2026-11-24" });
         Assert.Equal(HttpStatusCode.Forbidden, merchantRun.StatusCode);
@@ -207,8 +207,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
         using var otherMerchant = host.CreateClient();
         otherMerchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientBKey);
-        using var reviewer = host.CreateClient();
-        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        using var reviewer = await host.SignInReviewerAsync();
 
         var clean = await PostAsync<SettlementWalletResponse>(
             merchant, "/v1/settlement/wallets", new { network = "polygon", address = Address, label = "Treasury" }, HttpStatusCode.Created);
@@ -271,8 +270,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         });
         using var merchant = host.CreateClient();
         merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
-        using var reviewer = host.CreateClient();
-        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
+        using var reviewer = await host.SignInReviewerAsync();
         var clean = await PostAsync<SettlementWalletResponse>(merchant, "/v1/settlement/wallets", new { network = "polygon", address = Address }, HttpStatusCode.Created);
         var risky = await PostAsync<SettlementWalletResponse>(
             merchant, "/v1/settlement/wallets", new { network = "ethereum", address = SandboxWalletScreening.HighRiskAddress }, HttpStatusCode.Created);
@@ -387,16 +385,16 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
         var ledger = await client.GetFromJsonAsync<List<LedgerEntryResponse>>($"/v1/orders/{order.OrderId}/ledger");
         Assert.Equal(["FIAT_RECEIVED", "CRYPTO_PURCHASED", "CRYPTO_SENT"], ledger!.Select(entry => entry.Kind));
 
-        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        using var reviewer = await factory.SignInReviewerAsync();
         var balances = await reviewer.GetFromJsonAsync<LedgerBalancesResponse>("/v1/review/ledger/balances");
         Assert.True(balances!.BalancedPerAsset);
     }
 
     [Fact]
-    public async Task MerchantAndReviewerKeys_CannotUseEachOthersEndpoints()
+    public async Task MerchantKeysAndReviewerSessions_CannotUseEachOthersEndpoints()
     {
         using var merchant = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
-        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        using var reviewer = await factory.SignInReviewerAsync();
 
         using var merchantOnQueue = await merchant.GetAsync(new Uri("/v1/review/queue", UriKind.Relative));
         using var merchantOnLedger = await merchant.GetAsync(new Uri("/v1/review/ledger/balances", UriKind.Relative));
@@ -412,7 +410,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
     public async Task HeldPayment_IsReviewedWithAReasonOverHttp()
     {
         using var merchant = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
-        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        using var reviewer = await factory.SignInReviewerAsync();
         var quote = await CreateQuoteAsync(merchant);
         using var created = await SendOrderAsync(
             merchant, quote.QuoteId, Guid.NewGuid().ToString(), wallet: SandboxWalletScreening.HighRiskAddress, reviewer: reviewer);
@@ -511,7 +509,7 @@ public sealed class GatewayApiTests(GatewayApiFactory factory) : IClassFixture<G
     public async Task FrozenPayment_LooksOnlyOnHoldToTheMerchant()
     {
         using var merchant = factory.CreateClientFor(GatewayApiFactory.ClientAKey);
-        using var reviewer = factory.CreateClientFor(GatewayApiFactory.ReviewerKey);
+        using var reviewer = await factory.SignInReviewerAsync();
         var quote = await CreateQuoteAsync(merchant);
         using var created = await SendOrderAsync(
             merchant, quote.QuoteId, Guid.NewGuid().ToString(), wallet: SandboxWalletScreening.HighRiskAddress, reviewer: reviewer);

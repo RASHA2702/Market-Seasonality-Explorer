@@ -13,9 +13,11 @@ explicit change to this policy.
   CI runs a secret scan on every push and pull request.
 - API keys are stored only as SHA-256 hashes (`Gateway:ApiKeys`), compared in constant time. Issue a
   separate key per client and rotate by adding the new hash before removing the old one.
-- Give each reviewer their own key with the `Reviewer` role, so the review log shows who decided. The reviewer
-  console (`/review`) keeps the key only in the page's memory. In production, consider making `/review` and
-  `/v1/review` reachable only from an internal network or a VPN.
+- Reviewers sign in with their own account: a password (stored only as a PBKDF2 hash) and an authenticator-app
+  code. API keys cannot have the reviewer role. A reviewer's authenticator key (`TotpSecret`) is a secret like any
+  other: keep it in a secret store, and if it may have leaked, create new settings with the reviewer setup command.
+  Never share a reviewer account. In production, consider making `/review` and `/v1/review` reachable only from an
+  internal network or a VPN.
 - Webhook secrets come from configuration. Signatures are verified over the raw body before parsing, with
   a 5-minute replay window; several signatures may be active during rotation.
 - In any deployed environment, keep secrets in a managed secret store, not in files.

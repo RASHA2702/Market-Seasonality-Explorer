@@ -29,7 +29,7 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
         var nonce = NonceInPolicy().Match(policy).Groups[1].Value;
         Assert.NotEmpty(nonce);
         Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
-        Assert.Contains("form-action 'none'", policy, StringComparison.Ordinal); // no form can send the key anywhere by itself
+        Assert.Contains("form-action 'none'", policy, StringComparison.Ordinal); // no form can send a password anywhere by itself
         Assert.Contains("frame-ancestors 'none'", policy, StringComparison.Ordinal);
         Assert.Contains($"<script nonce=\"{nonce}\">", page, StringComparison.Ordinal);
         Assert.Contains($"<style nonce=\"{nonce}\">", page, StringComparison.Ordinal);
@@ -37,7 +37,11 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
         Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
         Assert.Contains("data-time-zone=\"Asia/Kolkata\"", page, StringComparison.Ordinal);
-        Assert.Contains("Reviewer key", page, StringComparison.Ordinal);
+        Assert.Contains("autocomplete=\"username\"", page, StringComparison.Ordinal);
+        Assert.Contains("autocomplete=\"current-password\"", page, StringComparison.Ordinal);
+        Assert.Contains("autocomplete=\"one-time-code\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reviewer key", page, StringComparison.Ordinal);
+        Assert.Contains("[hidden] { display: none !important; }", page, StringComparison.Ordinal); // signed-out controls stay hidden
         Assert.DoesNotMatch("(src|href)=\"(https?:)?//", page); // nothing loaded from other sites
     }
 
@@ -63,7 +67,7 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
             builder.UseSetting("Gateway:ApiKeys:Clients:0:WebhookSecret", "test-only-merchant-webhook-secret-0123456789");
             builder.ConfigureTestServices(services => services.AddSingleton<IWebhookSender>(sender));
         });
-        var (merchantA, merchantB, reviewer) = Clients(host);
+        var (merchantA, merchantB, reviewer) = await ClientsAsync(host);
         var withWebhook = await ApiFlows.CreateOrderAsync(merchantA);
         var withoutWebhook = await ApiFlows.CreateOrderAsync(merchantB); // client-b has no webhook: not a failure
         var dispatcher = host.Services.GetRequiredService<MerchantWebhookDispatcher>();
@@ -94,7 +98,7 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
     public async Task FrozenPayments_AreListedUntilReleased()
     {
         using var host = factory.WithWebHostBuilder(_ => { });
-        var (merchant, _, reviewer) = Clients(host);
+        var (merchant, _, reviewer) = await ClientsAsync(host);
         var order = await ApiFlows.CreateOrderAsync(merchant, reviewer, SandboxWalletScreening.HighRiskAddress);
         await ApiFlows.PostAsync<OrderResponse>(merchant, $"/v1/sandbox/orders/{order.OrderId}/pay", new { });
         await ApiFlows.PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/reject", new { reason = "Linked to fraud." });
@@ -108,7 +112,7 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
         Assert.DoesNotContain((await reviewer.GetFromJsonAsync<List<ReviewQueueItemResponse>>("/v1/review/frozen"))!, entry => entry.OrderId == order.OrderId);
     }
 
-    private static (HttpClient MerchantA, HttpClient MerchantB, HttpClient Reviewer) Clients(WebApplicationFactory<Program> host)
+    private static async Task<(HttpClient MerchantA, HttpClient MerchantB, HttpClient Reviewer)> ClientsAsync(WebApplicationFactory<Program> host)
     {
         static HttpClient With(WebApplicationFactory<Program> host, string key)
         {
@@ -117,7 +121,7 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
             return client;
         }
 
-        return (With(host, GatewayApiFactory.ClientAKey), With(host, GatewayApiFactory.ClientBKey), With(host, GatewayApiFactory.ReviewerKey));
+        return (With(host, GatewayApiFactory.ClientAKey), With(host, GatewayApiFactory.ClientBKey), await host.SignInReviewerAsync());
     }
 
     [GeneratedRegex("'nonce-([^']+)'")]

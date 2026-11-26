@@ -9,6 +9,7 @@
 :root { color-scheme: light dark; --bg: #f3f4f6; --card: #ffffff; --text: #15171c; --muted: #5a6170; --line: #dfe2e8; --accent: #1d4ed8; --on-accent: #ffffff; --ok: #0f7a45; --warn: #8a4b00; --danger: #b42318; --chip: #eef1f6; }
 @media (prefers-color-scheme: dark) { :root { --bg: #0e1014; --card: #171a20; --text: #eef0f4; --muted: #a3a9b5; --line: #2b303a; --accent: #6d94ff; --on-accent: #0a0c10; --ok: #45c98b; --warn: #f2b25c; --danger: #ff8a80; --chip: #222733; } }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* a class's display must never reveal a hidden element */
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; }
 .bar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--line); }
 .brand { font-weight: 700; }
@@ -66,12 +67,17 @@ th { color: var(--muted); font-weight: 600; }
 .inline-form label { margin: 0; }
 .inline-form input { width: auto; }
 .table-scroll { overflow-x: auto; }
+.who { font-weight: 600; color: var(--text); }
+.notice { margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--muted); font-size: 14px; }
+.notice.warn { border-color: var(--warn); color: var(--text); }
+.notice.warn strong { color: var(--warn); }
 </style>
 </head>
 <body data-time-zone="__TIME_ZONE__" data-sandbox="__SANDBOX__">
 <header class="bar">
   <div class="brand">Compliance console<span class="tag" id="mode-tag" hidden>Sandbox</span></div>
   <div class="session" id="session" hidden>
+    <span class="who" id="who"></span>
     <button type="button" class="secondary" id="refresh">Refresh</button>
     <button type="button" class="secondary" id="sign-out">Sign out</button>
   </div>
@@ -79,16 +85,21 @@ th { color: var(--muted); font-weight: 600; }
 <main>
   <section class="card narrow" id="sign-in">
     <h1>Sign in</h1>
-    <p class="lead">Enter your reviewer key. It stays in this page only: reloading the page, signing out or 30 minutes without activity forgets it.</p>
+    <p class="lead">Use your reviewer username and password, and the 6-digit code your authenticator app shows now. Reloading the page, signing out or 30 minutes without activity ends the session.</p>
     <form id="sign-in-form">
-      <label for="key">Reviewer key</label>
-      <input id="key" name="password" type="password" autocomplete="current-password" spellcheck="false" required>
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+      <label for="code">Code from your authenticator app</label>
+      <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required>
       <p class="error" id="sign-in-error" role="alert" hidden></p>
-      <p><button type="submit">Open the console</button></p>
+      <p><button type="submit">Sign in</button></p>
     </form>
   </section>
 
   <div id="console" hidden>
+    <p class="notice" id="sign-in-notice" role="status" hidden></p>
     <nav class="summary" aria-label="Summary">
       <a class="tile" href="#held"><span class="count" id="count-held">0</span><span class="label">Held payments</span><span class="hint" id="hint-held"></span></a>
       <a class="tile" href="#wallets"><span class="count" id="count-wallets">0</span><span class="label">Wallets to review</span><span class="hint"></span></a>
@@ -140,10 +151,10 @@ th { color: var(--muted); font-weight: 600; }
 <script nonce="__NONCE__">
 (() => {
   'use strict';
-  const IDLE_LIMIT_MS = 30 * 60 * 1000;
   const zone = document.body.dataset.timeZone || 'UTC';
   const byId = (id) => document.getElementById(id);
-  let key = null;
+  let token = null; // the session token: in this page's memory only, never stored or put in an address
+  let idleLimitMs = 30 * 60 * 1000;
   let lastActivity = Date.now();
 
   if (document.body.dataset.sandbox === 'true') { byId('mode-tag').hidden = false; }
@@ -187,14 +198,14 @@ th { color: var(--muted); font-weight: 600; }
   }
 
   async function api(path, method = 'GET', body = undefined) {
-    const headers = { Authorization: 'Bearer ' + key, Accept: 'application/json' };
+    const headers = { Authorization: 'Bearer ' + token, Accept: 'application/json' };
     if (body !== undefined) { headers['Content-Type'] = 'application/json'; }
     const response = await fetch(path, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
       cache: 'no-store', credentials: 'omit', redirect: 'error',
     });
     if (response.status === 401 || response.status === 403) {
-      throw new ApiError(response.status, 'NOT_A_REVIEWER', 'This key is not accepted as a reviewer key.');
+      throw new ApiError(response.status, 'SESSION_ENDED', 'Your session has ended. Sign in again.');
     }
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
@@ -409,7 +420,15 @@ th { color: var(--muted); font-weight: 600; }
   }
 
   function signOut(message) {
-    key = null;
+    if (token) {
+      // Ends the session on the server too; the page forgets it either way.
+      fetch('/v1/review/sign-out', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + token }, cache: 'no-store', credentials: 'omit', redirect: 'error', keepalive: true,
+      }).catch(() => {});
+    }
+    token = null;
+    byId('who').textContent = '';
+    byId('sign-in-notice').hidden = true;
     for (const id of ['held-list', 'wallet-list', 'frozen-list', 'reconciliation-list', 'failed-list']) { byId(id).replaceChildren(); }
     byId('console').hidden = true;
     byId('session').hidden = true;
@@ -417,28 +436,55 @@ th { color: var(--muted); font-weight: 600; }
     const error = byId('sign-in-error');
     error.textContent = message || '';
     error.hidden = !message;
-    byId('key').focus();
+    byId('username').focus();
+  }
+
+  // Tells the reviewer about the previous sign-in and any failed attempts since, so they notice someone else trying.
+  function showSignInNotice(signIn) {
+    const notice = byId('sign-in-notice');
+    const failed = signIn.failedAttemptsSincePrevious;
+    const attempts = failed + (failed === 1 ? ' failed sign-in attempt' : ' failed sign-in attempts');
+    const parts = signIn.previousSignInAt
+      ? ['Previous sign-in: ' + when(signIn.previousSignInAt) + '.', failed > 0 ? attempts + ' since then.' : '']
+      : ['This is your first sign-in.', failed > 0 ? attempts + ' before it.' : ''];
+    if (failed > 0) {
+      parts.push('If they were not yours, make a new password and authenticator key with the reviewer setup command.');
+    }
+    notice.replaceChildren(failed > 0 ? h('strong', { text: 'Check: ' }) : '', parts.filter(Boolean).join(' '));
+    notice.className = 'notice' + (failed > 0 ? ' warn' : '');
+    notice.hidden = false;
   }
 
   byId('sign-in-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const field = byId('key');
-    key = field.value.trim();
-    field.value = '';
+    const body = { username: byId('username').value.trim(), password: byId('password').value, code: byId('code').value.trim() };
+    byId('password').value = '';
+    byId('code').value = '';
     const button = event.currentTarget.querySelector('button');
     button.disabled = true;
     try {
-      await api('/v1/review/queue'); // one request to check the key before loading everything
-      await refresh();
+      const response = await fetch('/v1/review/sign-in', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body),
+        cache: 'no-store', credentials: 'omit', redirect: 'error',
+      });
+      const signIn = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new ApiError(response.status, signIn?.error?.code ?? 'ERROR', signIn?.error?.message ?? 'Sign-in failed (' + response.status + ').');
+      }
+      token = signIn.token;
+      idleLimitMs = signIn.idleMinutes * 60 * 1000;
+      byId('who').textContent = signIn.reviewer.displayName;
+      showSignInNotice(signIn);
       lastActivity = Date.now();
       byId('sign-in').hidden = true;
       byId('sign-in-error').hidden = true;
       byId('console').hidden = false;
       byId('session').hidden = false;
+      try { await refresh(); } catch (failure) { show(byId('console-error'), failure); }
     } catch (failure) {
-      key = null;
+      token = null;
       const error = byId('sign-in-error');
-      error.textContent = failure instanceof ApiError && failure.status !== 401 && failure.status !== 403 ? failure.message : 'This key is not accepted as a reviewer key.';
+      error.textContent = failure instanceof ApiError ? failure.message : 'Sign-in failed. Try again.';
       error.hidden = false;
     } finally {
       button.disabled = false;
@@ -464,7 +510,7 @@ th { color: var(--muted); font-weight: 600; }
     document.addEventListener(name, () => { lastActivity = Date.now(); }, { passive: true });
   }
   setInterval(() => {
-    if (key && Date.now() - lastActivity > IDLE_LIMIT_MS) { signOut('Signed out after 30 minutes without activity.'); }
+    if (token && Date.now() - lastActivity > idleLimitMs) { signOut('Signed out after ' + idleLimitMs / 60000 + ' minutes without activity.'); }
   }, 30000);
 })();
 </script>

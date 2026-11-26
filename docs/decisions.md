@@ -66,11 +66,15 @@ customers pay on that page.
 
 ### 6. Who is the compliance officer (MLRO)? Is there an AML/KYC policy? Who reviews held orders, and how fast?
 **ANSWERED** (2026-11-24): you act as the compliance officer for now and review held payments within 24 hours.
-- Built: the review queue shows how long each held payment has waited and flags any older than 24 hours;
-  you use a reviewer API key, and every decision is logged with your name and reason. The reviewer console at
-  `/review` puts the queue, frozen payments and wallets waiting for review on one page.
-- Proposed: one reviewer key per person, never shared, so the log shows who decided. Separate reviewer accounts
-  with two-factor sign-in are worth adding before more people review.
+- Built: the review queue shows how long each held payment has waited and flags any older than 24 hours, and
+  every decision is logged with your username and reason. The reviewer console at `/review` puts the queue, frozen
+  payments and wallets waiting for review on one page.
+- Built (2026-11-26): each reviewer has their own account and signs in with a password and an authenticator-app code;
+  reviewer API keys are no longer accepted. Sign-ins and failed attempts are logged, and repeated failures pause
+  sign-in. Set up your own account with the reviewer setup command (README, Reviewer accounts).
+- Proposed: never share an account; give each new reviewer their own, so the log always shows who decided.
+- **[Lawyer]** How long reviewer sign-in records and review decisions must be kept, and whether some decisions
+  (for example releasing frozen money) need a second person's approval.
 - Written AML/KYC policy: **OPEN**.
 - **[Lawyer]** Whether your company must formally appoint officers (for example a principal officer and a
   designated director under PMLA) and what its written policy must cover.

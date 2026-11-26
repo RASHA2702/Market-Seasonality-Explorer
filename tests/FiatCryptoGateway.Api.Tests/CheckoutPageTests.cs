@@ -22,7 +22,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task Customer_SeesTheAmountMerchantAndDeadline_ThenPaysInTheSandbox()
     {
         using var host = Host(displayName: "Acme Books", returnUrl: "https://merchant.example/return?from=checkout");
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
 
@@ -52,7 +52,8 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task HeldPayment_LooksLikeAnyOtherPaymentToTheCustomer()
     {
         using var host = Host();
-        var (merchant, reviewer) = Clients(host);
+        var merchant = Merchant(host);
+        using var reviewer = await host.SignInReviewerAsync();
         var order = await CreateOrderAsync(merchant, reviewer, SandboxWalletScreening.HighRiskAddress);
         using var browser = Browser(host);
 
@@ -72,7 +73,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 25, 6, 0, 0, TimeSpan.Zero));
         using var host = Host(clock: clock);
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
         clock.Advance(TimeSpan.FromMinutes(16)); // past the 15-minute payment window
@@ -90,7 +91,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task RefundedPayment_IsShownAsRefunded()
     {
         using var host = Host();
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
 
@@ -105,7 +106,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task UnknownAndAlteredLinks_GetTheSameNotFoundPage()
     {
         using var host = Host();
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
         var token = order.CheckoutUrl!.Segments[^1];
@@ -127,7 +128,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task MerchantName_IsShownAsTextNeverAsMarkup()
     {
         using var host = Host(displayName: "<img src=x onerror=alert(1)>");
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
 
@@ -141,7 +142,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task Page_IsLockedDown_AndLoadsNothingFromOtherSites()
     {
         using var host = Host();
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
 
@@ -167,7 +168,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
     public async Task StatusEndpoint_ReportsWhatTheCustomerMaySee()
     {
         using var host = Host();
-        var (merchant, _) = Clients(host);
+        var merchant = Merchant(host);
         var order = await CreateOrderAsync(merchant);
         using var browser = Browser(host);
         var statusPath = order.CheckoutUrl!.AbsolutePath + "/status";
@@ -221,13 +222,11 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
             }
         });
 
-    private static (HttpClient Merchant, HttpClient Reviewer) Clients(WebApplicationFactory<Program> host)
+    private static HttpClient Merchant(WebApplicationFactory<Program> host)
     {
         var merchant = host.CreateClient();
         merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
-        var reviewer = host.CreateClient();
-        reviewer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ReviewerKey);
-        return (merchant, reviewer);
+        return merchant;
     }
 
     /// <summary>A customer's browser: no API key, and redirects are seen rather than followed.</summary>

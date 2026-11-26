@@ -1,3 +1,4 @@
+using FiatCryptoGateway.Application.Reviewers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -54,7 +55,8 @@ public sealed class StartupSettingsTests
     [InlineData("Gateway:Checkout:BaseUrl", "http://pay.example.com")]
     [InlineData("Gateway:Checkout:LinkSecret", "too-short")]
     [InlineData("Gateway:ApiKeys:Clients:0:CheckoutReturnUrl", "http://merchant.example/return")]
-    [InlineData("Gateway:ApiKeys:Clients:2:CheckoutReturnUrl", "https://merchant.example/return")] // a reviewer has no checkout
+    [InlineData("Gateway:Review:Reviewers:0:TotpSecret", "ABCDEFGH")]                          // far shorter than 160 bits
+    [InlineData("Gateway:Review:SessionIdleMinutes", "0")]
     [InlineData("Gateway:ApiKeys:Clients:0:DisplayName", " ")]
     [InlineData("Gateway:Settlement:Networks", "polygon,mars")]
     public void InvalidLimitsOrDeliverySettings_StopStartup(string key, string value)
@@ -103,11 +105,30 @@ public sealed class StartupSettingsTests
     }
 
     [Fact]
-    public void ReviewerWithAWebhook_StopsStartup()
+    public void ReviewerApiKey_StopsStartup()
     {
-        Assert.Throws<OptionsValidationException>(() => Validate(
-            ("Gateway:ApiKeys:Clients:2:WebhookUrl", "https://merchant.example/hooks"),
-            ("Gateway:ApiKeys:Clients:2:WebhookSecret", WebhookSecret)));
+        var exception = Assert.Throws<OptionsValidationException>(() => Validate(
+            ("Gateway:ApiKeys:Clients:2:ClientId", "old-reviewer-key"),
+            ("Gateway:ApiKeys:Clients:2:KeySha256", GatewayApiFactory.Sha256Hex("test-only-old-reviewer-key")),
+            ("Gateway:ApiKeys:Clients:2:Role", "Reviewer")));
+
+        Assert.Contains("reviewer account", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReviewerNamedLikeAMerchant_StopsStartup()
+    {
+        Assert.Throws<OptionsValidationException>(() => Validate(("Gateway:Review:Reviewers:0:Username", "client-a")));
+    }
+
+    [Fact]
+    public void WeakReviewerPasswordHash_StopsStartup()
+    {
+        var exception = Assert.Throws<OptionsValidationException>(() => Validate(
+            ("Gateway:Review:Reviewers:0:PasswordHash", PasswordHashing.Hash(TestReviewer.Password, iterations: 100_000))));
+
+        Assert.Contains("PasswordHash", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("pbkdf2-sha256:", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Runs every startup check on the API's registrations with these settings.</summary>
@@ -119,10 +140,12 @@ public sealed class StartupSettingsTests
             ["Gateway:ApiKeys:Clients:0:KeySha256"] = GatewayApiFactory.Sha256Hex(GatewayApiFactory.ClientAKey),
             ["Gateway:ApiKeys:Clients:1:ClientId"] = "client-b",
             ["Gateway:ApiKeys:Clients:1:KeySha256"] = GatewayApiFactory.Sha256Hex(GatewayApiFactory.ClientBKey),
-            ["Gateway:ApiKeys:Clients:2:ClientId"] = "compliance-officer",
-            ["Gateway:ApiKeys:Clients:2:KeySha256"] = GatewayApiFactory.Sha256Hex(GatewayApiFactory.ReviewerKey),
-            ["Gateway:ApiKeys:Clients:2:Role"] = "Reviewer",
         };
+        foreach (var (key, value) in TestReviewer.Settings)
+        {
+            settings[key] = value;
+        }
+
         foreach (var (key, value) in overrides)
         {
             settings[key] = value;

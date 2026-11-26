@@ -16,9 +16,10 @@ public sealed class ReviewConsoleOptions
 }
 
 /// <summary>
-/// The compliance officer's console: one page that signs in with a reviewer key and works through the reviewer API.
-/// The key stays in the page's memory (no cookie, so no cross-site request forgery, and nothing left behind when the
-/// page closes). The page itself holds no data; everything comes from the API under the key's Reviewer role.
+/// The compliance officer's console: one page where a reviewer signs in with a username, a password and an
+/// authenticator code, then works through the reviewer API. The session token stays in the page's memory (no cookie,
+/// so no cross-site request forgery, and nothing left behind when the page closes). The page itself holds no data;
+/// everything comes from the API under the reviewer's session.
 /// </summary>
 public static class ReviewConsole
 {
@@ -51,8 +52,8 @@ public static class ReviewConsole
         }
 
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(18));
-        // No form ever submits by itself: the page sends everything through the API, so a key typed into a form can
-        // never end up in an address bar or a server log.
+        // No form ever submits by itself: the page sends everything through the API, so a password typed into a form
+        // can never end up in an address bar or a server log.
         CheckoutPage.ApplySecurityHeaders(http.Response, nonce, formAction: "'none'");
         var html = Template.Value
             .Replace("__NONCE__", nonce, StringComparison.Ordinal)

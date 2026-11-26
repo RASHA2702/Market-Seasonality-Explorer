@@ -157,6 +157,24 @@ public sealed record WebhookDeliveryResponse(
 
 public sealed record ReconcileRequest(string? Day);
 
+/// <summary>A reviewer's sign-in: username, password and the current 6-digit code from their authenticator app.</summary>
+public sealed record ReviewerSignInRequest(string? Username, string? Password, string? Code);
+
+public sealed record ReviewerResponse(string Username, string DisplayName);
+
+/// <summary>
+/// The session token to send as <c>Authorization: Bearer</c>, when the session ends at the latest, after how many idle
+/// minutes it ends sooner, and the previous sign-in with the failed or refused attempts since, so a reviewer notices
+/// someone else trying.
+/// </summary>
+public sealed record ReviewerSignInResponse(
+    string Token,
+    DateTimeOffset ExpiresAt,
+    int IdleMinutes,
+    ReviewerResponse Reviewer,
+    DateTimeOffset? PreviousSignInAt,
+    int FailedAttemptsSincePrevious);
+
 /// <summary>A notification the gateway gave up delivering. <c>About</c> is <c>payment_order</c> or <c>settlement_wallet</c>.</summary>
 public sealed record FailedDeliveryResponse(
     Guid EventId,

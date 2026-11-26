@@ -24,9 +24,10 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state and send a given-up notification again. |
-| Reviewer console | One page at `/review` for the compliance officer: held payments to decide, frozen payments to release, wallets to review, reconciliation differences, notifications that failed, and whether the ledger balances. It signs in with a reviewer key, keeps the key only in the page's memory and signs out after 30 minutes without activity. |
+| Reviewer console | One page at `/review` for the compliance officer: held payments to decide, frozen payments to release, wallets to review, reconciliation differences, notifications that failed, and whether the ledger balances. Reviewers sign in with their own username, password and a code from an authenticator app; the session lives only in the page's memory and ends after 30 minutes without activity. |
+| Reviewer sign-in | One account per person, with two-factor authentication (a password and a 6-digit authenticator code, each code usable once). Five failures in a row pause sign-in for 15 minutes; sign-in requests are rate-limited per address. Sessions end on sign-out, after 30 idle minutes or 12 hours, or when the account changes. Every sign-in, failure and sign-out is logged, and the console tells a reviewer about failed attempts since their last visit. A setup command creates the account's settings and shows the authenticator QR code. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 353 .NET tests (20 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 424 .NET tests (23 of them against a real PostgreSQL in Docker), 47 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -105,16 +106,39 @@ export ConnectionStrings__Gateway="Host=127.0.0.1;Port=5433;Username=gateway_app
 The API applies database migrations at startup; set `Gateway__Storage__ApplyMigrationsOnStartup=false` to
 apply them yourself with `db/migrate.sh` instead. Several API instances can share one database.
 
-### Reviewer key
+### Reviewer accounts
 
-The review endpoints need a key with the `Reviewer` role. Create one the same way as in step 1 and add it
-as a second client:
+Reviewers (the compliance officer, and anyone who later shares the work) each have their own account and sign in
+with a password and a 6-digit code from an authenticator app (Google Authenticator, Microsoft Authenticator,
+1Password and others). There are no reviewer API keys: an API client with `Role=Reviewer` stops the API at startup.
+
+Each reviewer runs the setup command on their own computer:
 
 ```bash
-export Gateway__ApiKeys__Clients__1__ClientId=compliance-officer
-export Gateway__ApiKeys__Clients__1__KeySha256=<sha256 of the reviewer key>
-export Gateway__ApiKeys__Clients__1__Role=Reviewer
+dotnet run --project src/FiatCryptoGateway.ReviewerSetup
 ```
+
+It asks for a username and a password (typed twice, not shown), draws a QR code to scan with the authenticator app,
+checks one code from the app, and prints four settings: the username, display name, a hash of the password (never
+the password itself) and the authenticator key. Set them where the API runs, then restart it:
+
+```bash
+export Gateway__Review__Reviewers__0__Username=<from the setup command>
+export Gateway__Review__Reviewers__0__DisplayName=<from the setup command>
+export Gateway__Review__Reviewers__0__PasswordHash=<from the setup command>
+export Gateway__Review__Reviewers__0__TotpSecret=<from the setup command>
+```
+
+For a second reviewer use `__1__` (`-- --index 1` makes the command print that), and so on. The authenticator key
+lets anyone make that reviewer's codes: keep these values in a secret store or environment variables, never in a
+committed file or a chat. To change a password or replace a lost phone, run the command again and replace the
+settings; the reviewer's open sessions end on restart. Removing a reviewer's settings ends their access.
+
+Sign-in rules, each a setting under `Gateway:Review`: five failures in a row pause sign-in for 15 minutes
+(`MaxFailedAttempts`, `LockoutMinutes`); each network address may try 10 times a minute (`SignInAttemptsPerMinute`);
+a session ends after 30 minutes without use or 12 hours in all (`SessionIdleMinutes`, `SessionMaxHours`). Every
+sign-in, failure, pause and sign-out is recorded with the reviewer and the time; with PostgreSQL that log is
+append-only.
 
 Sandbox test customers (all in India unless noted): `cust_verified`, `cust_basic` (1,000 USD per payment,
 2,000 per day, 5,000 per month), `cust_unverified`, `cust_sanctioned`, `cust_blocked_country` (North Korea)
@@ -123,8 +147,9 @@ are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 
 ### Reviewer console
 
-Open <http://127.0.0.1:5080/review> and sign in with the reviewer key. One page shows everything waiting for a
-person, with a count for each:
+Open <http://127.0.0.1:5080/review> and sign in with your username, password and the current code from your
+authenticator app. After sign-in the page says when you last signed in and warns about failed attempts since then.
+One page shows everything waiting for a person, with a count for each:
 
 | Section | What you can do |
 |---|---|
@@ -136,13 +161,13 @@ person, with a count for each:
 | Ledger | Whether the whole ledger balances. |
 
 Each payment shows its full history on request. Every decision needs a reason and is logged with the reviewer's
-client ID and the time, exactly as through the API, because the page works only through the reviewer API.
+username and the time, exactly as through the API, because the page works only through the reviewer API.
 
-The key stays in the page's memory only: it is never saved in the browser, sent in an address or put in a cookie,
-and reloading or closing the page signs you out. After 30 minutes without activity the page signs out by itself. The
-page loads nothing from other sites, cannot be framed, and holds no data of its own; a key without the `Reviewer` role
-is refused. `Gateway__Review__ConsoleEnabled=false` stops serving it. In production, consider making `/review` (and
-the `/v1/review` API) reachable only from your internal network or a VPN.
+The session token stays in the page's memory only: it is never saved in the browser, sent in an address or put in
+a cookie, and reloading or closing the page signs you out. After 30 minutes without activity the session ends. The
+page loads nothing from other sites, cannot be framed, and holds no data of its own.
+`Gateway__Review__ConsoleEnabled=false` stops serving it. In production, consider making `/review` (and the
+`/v1/review` API) reachable only from your internal network or a VPN.
 
 ### Merchant webhooks
 
@@ -293,14 +318,23 @@ as a difference. A run never changes the books; each difference is for a person 
 | `AMOUNT_MISMATCH` | Both have it, with different amounts or currencies. | A partial capture, a fee taken out of the amount, or a recording error. |
 | `DUPLICATE_IN_LEDGER`, `DUPLICATE_IN_REPORT` | One movement appears twice on one side. | PostgreSQL refuses to book a movement twice, so a duplicate in the books means data was changed outside the gateway. |
 
-To reconcile a finished day now, and to see past runs (reviewer key):
+To reconcile a finished day now, and to see past runs, first sign in as a reviewer. This reads the password without
+showing it or keeping it in your shell history (needs `jq`):
 
 ```bash
-curl -s -X POST http://127.0.0.1:5080/v1/review/reconciliation/runs -H "Authorization: Bearer $reviewer_key" -H "Content-Type: application/json" -d '{"day":"2026-11-24"}'
+read -r -p "Username: " u; read -r -s -p "Password: " p; echo; read -r -p "Code: " c
 ```
 
 ```bash
-curl -s "http://127.0.0.1:5080/v1/review/reconciliation/runs?day=2026-11-24" -H "Authorization: Bearer $reviewer_key"
+reviewer_token=$(jq -n --arg u "$u" --arg p "$p" --arg c "$c" '{username:$u,password:$p,code:$c}' | curl -s -X POST http://127.0.0.1:5080/v1/review/sign-in -H "Content-Type: application/json" -d @- | jq -r .token); unset p
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:5080/v1/review/reconciliation/runs -H "Authorization: Bearer $reviewer_token" -H "Content-Type: application/json" -d '{"day":"2026-11-24"}'
+```
+
+```bash
+curl -s "http://127.0.0.1:5080/v1/review/reconciliation/runs?day=2026-11-24" -H "Authorization: Bearer $reviewer_token"
 ```
 
 Settings are under `Gateway:Reconciliation`: `TimeZone` (default `Asia/Kolkata`), `RunAfterHour` (6),
@@ -320,23 +354,25 @@ records are kept in memory: after a restart with PostgreSQL storage, payments fr
 | `GET /v1/orders/{id}`, `GET /v1/orders/{id}/ledger` | Order status and history; its journal entries. |
 | `POST /v1/webhooks/sandbox-fiat` | Payment-provider webhook (signature-verified, no API key). |
 | `POST /v1/sandbox/orders/{id}/pay`, `/confirm` | Simulate the customer's payment and on-chain confirmations. |
-| `GET /v1/review/queue`, `GET /v1/review/orders/{id}` | Reviewer keys only: held payments, longest-waiting first, with an overdue flag; full screening reasons and the review log. |
+| `GET /v1/review/queue`, `GET /v1/review/orders/{id}` | Reviewers only: held payments, longest-waiting first, with an overdue flag; full screening reasons and the review log. |
 | `POST /v1/review/orders/{id}/approve`, `/reject`, `/freeze`, `/release` | Reviewer decisions. Each needs a `reason`; `/freeze` also needs the `reportReference` of the report filed. |
-| `GET /v1/review/orders/{id}/webhooks` | Reviewer keys only: each merchant notification for the order, with its delivery state, attempts and last error. |
+| `GET /v1/review/orders/{id}/webhooks` | Reviewers only: each merchant notification for the order, with its delivery state, attempts and last error. |
 | `GET /v1/settlement/wallets`, `POST /v1/settlement/wallets` | The merchant's settlement wallets, newest first; register one (`network`, `address`, optional `label`). |
 | `POST /v1/settlement/wallets/{id}/disable` | Withdraw one of the merchant's wallets. |
-| `GET /v1/review/settlement-wallets`, `GET /v1/review/settlement-wallets/{id}` | Reviewer keys only: wallets waiting for review, with their screening and history. |
-| `GET /v1/review/settlement-wallets/{id}/webhooks` | Reviewer keys only: the merchant notifications about a wallet, with their delivery state. |
+| `GET /v1/review/settlement-wallets`, `GET /v1/review/settlement-wallets/{id}` | Reviewers only: wallets waiting for review, with their screening and history. |
+| `GET /v1/review/settlement-wallets/{id}/webhooks` | Reviewers only: the merchant notifications about a wallet, with their delivery state. |
 | `POST /v1/review/settlement-wallets/{id}/approve`, `/reject`, `/disable` | Reviewer decisions on a wallet, each with a `reason`. A sanctioned wallet cannot be approved. |
-| `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
-| `GET /v1/review/frozen` | Reviewer keys only: frozen payments, oldest first, with the reference of the report filed. |
-| `GET /v1/review/webhooks/failed?days=7` | Reviewer keys only: merchant notifications given up on in the last 1 to 90 days (7 by default), newest first. Merchants without a webhook URL are not listed. |
-| `POST /v1/review/webhooks/{eventId}/retry` | Reviewer keys only: send a given-up notification again (`DELIVERY_NOT_FAILED` if it was delivered or is still being retried). |
-| `GET /review` | The reviewer console (no data in the page itself; it signs in with a reviewer key). |
+| `GET /v1/review/ledger/balances` | Reviewers only: whole-ledger balances across all merchants. |
+| `GET /v1/review/frozen` | Reviewers only: frozen payments, oldest first, with the reference of the report filed. |
+| `GET /v1/review/webhooks/failed?days=7` | Reviewers only: merchant notifications given up on in the last 1 to 90 days (7 by default), newest first. Merchants without a webhook URL are not listed. |
+| `POST /v1/review/webhooks/{eventId}/retry` | Reviewers only: send a given-up notification again (`DELIVERY_NOT_FAILED` if it was delivered or is still being retried). |
+| `GET /review` | The reviewer console (no data in the page itself; reviewers sign in on it). |
+| `POST /v1/review/sign-in` | A reviewer signs in (`username`, `password`, `code`) and gets a session `token` for `Authorization: Bearer`, with when it expires. Any mistake gives the same `SIGN_IN_FAILED`; too many attempts from one address give `TOO_MANY_ATTEMPTS` (429). |
+| `POST /v1/review/sign-out` | Ends the reviewer's session. |
 | `GET /checkout/{link}`, `GET /checkout/{link}/status` | The customer's payment page and its status (no key: the signed link is the credential). |
 | `POST /checkout/{link}/pay` | Sandbox only: the customer's simulated payment, then back to the page. |
-| `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd&limit=30` | Reviewer keys only: reconciliation runs, newest first, with every difference found. Both parameters are optional. |
-| `POST /v1/review/reconciliation/runs` | Reviewer keys only: reconcile a finished day now (`{"day":"yyyy-MM-dd"}`). |
+| `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd&limit=30` | Reviewers only: reconciliation runs, newest first, with every difference found. Both parameters are optional. |
+| `POST /v1/review/reconciliation/runs` | Reviewers only: reconcile a finished day now (`{"day":"yyyy-MM-dd"}`). |
 
 Errors are `{"error":{"code":"...","message":"..."}}` with stable codes such as `QUOTE_EXPIRED`,
 `KYC_REQUIRED` or `BELOW_MINIMUM_AMOUNT`. Amounts are strings so JSON clients never lose precision.
@@ -368,6 +404,7 @@ for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app P
 | `src/FiatCryptoGateway.Application` | Order orchestration, provider interfaces, configuration, the sandbox-only safety gate. |
 | `src/FiatCryptoGateway.Sandbox` | Simulated providers and in-memory stores. Real adapters will sit beside it. |
 | `src/FiatCryptoGateway.Persistence.Postgres` | PostgreSQL stores, cross-instance order locks, and the migration runner. |
-| `src/FiatCryptoGateway.Api` | HTTP API, API-key authentication, the checkout page, the reviewer console, background workers. |
+| `src/FiatCryptoGateway.Api` | HTTP API, API-key and reviewer-session authentication, the checkout page, the reviewer console, background workers. |
+| `src/FiatCryptoGateway.ReviewerSetup` | The command that creates a reviewer account's settings and authenticator QR code. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md) and the [partner integration design](docs/partner-integration.md). |

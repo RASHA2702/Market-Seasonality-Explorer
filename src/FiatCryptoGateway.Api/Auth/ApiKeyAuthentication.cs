@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Application.Reviewers;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 
@@ -15,7 +16,10 @@ public sealed class ApiKeyClient
     /// <summary>Lower- or upper-case hex SHA-256 of the API key. The key itself is never stored.</summary>
     public string KeySha256 { get; set; } = string.Empty;
 
-    /// <summary><c>Merchant</c> (default) creates payments; <c>Reviewer</c> works the compliance queue.</summary>
+    /// <summary>
+    /// <c>Merchant</c>, the only role an API key can have. Reviewers sign in to the console with a password and an
+    /// authenticator code instead (<see cref="ReviewerAccessOptions"/>).
+    /// </summary>
     public string Role { get; set; } = nameof(ApiClientRole.Merchant);
 
     /// <summary>The name customers see on the checkout page (merchants only). Defaults to the client ID.</summary>
@@ -51,12 +55,13 @@ public sealed class ApiKeyOptions
     public IList<ApiKeyClient> Clients { get; } = new List<ApiKeyClient>();
 }
 
-public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
+public sealed class ApiKeyOptionsValidator(IOptions<ReviewerAccessOptions> reviewers) : IValidateOptions<ApiKeyOptions>
 {
     public ValidateOptionsResult Validate(string? name, ApiKeyOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         var failures = new List<string>();
+        var reviewerUsernames = ReviewerUsernames().ToHashSet(StringComparer.Ordinal);
         foreach (var client in options.Clients)
         {
             if (string.IsNullOrWhiteSpace(client.ClientId))
@@ -69,9 +74,20 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
                 failures.Add($"API client '{client.ClientId}' needs KeySha256: the 64-character hex SHA-256 of its key.");
             }
 
-            if (!Enum.TryParse<ApiClientRole>(client.Role, out var role) || !Enum.IsDefined(role) || role.ToString() != client.Role)
+            if (client.Role == nameof(ApiClientRole.Reviewer))
             {
-                failures.Add($"API client '{client.ClientId}' has role '{client.Role}'; use Merchant or Reviewer.");
+                failures.Add(
+                    $"API client '{client.ClientId}' has the Reviewer role, which API keys no longer take: reviewers sign in with a " +
+                    "password and an authenticator code. Remove this client and set up a reviewer account (README, Reviewer accounts).");
+            }
+            else if (client.Role != nameof(ApiClientRole.Merchant))
+            {
+                failures.Add($"API client '{client.ClientId}' has role '{client.Role}'; use Merchant.");
+            }
+
+            if (reviewerUsernames.Contains(client.ClientId))
+            {
+                failures.Add($"API client '{client.ClientId}' has the same name as a reviewer; give them different names so no log can confuse them.");
             }
 
             ValidateWebhook(client, failures);
@@ -84,6 +100,19 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    /// <summary>Reviewer settings that are themselves invalid are reported by their own check, not twice.</summary>
+    private IEnumerable<string> ReviewerUsernames()
+    {
+        try
+        {
+            return [.. reviewers.Value.Reviewers.Select(reviewer => reviewer.Username)];
+        }
+        catch (OptionsValidationException)
+        {
+            return [];
+        }
     }
 
     private static void ValidateCheckout(ApiKeyClient client, List<string> failures)
@@ -140,7 +169,7 @@ public sealed class ApiKeyOptionsValidator : IValidateOptions<ApiKeyOptions>
 }
 
 /// <summary>
-/// Authenticates <c>Authorization: Bearer &lt;key&gt;</c> by comparing the key's SHA-256 with configured
+/// Authenticates a merchant's <c>Authorization: Bearer &lt;key&gt;</c> by comparing the key's SHA-256 with configured
 /// hashes in constant time. Each key maps to one client ID; every resource is scoped to that client.
 /// </summary>
 public sealed class ApiKeyAuthenticationHandler(
@@ -155,14 +184,12 @@ public sealed class ApiKeyAuthenticationHandler(
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        const string prefix = "Bearer ";
-        var header = Request.Headers.Authorization.ToString();
-        if (!header.StartsWith(prefix, StringComparison.Ordinal))
+        if (GatewayAuthentication.BearerToken(Request) is not { } key)
         {
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        var presented = SHA256.HashData(Encoding.UTF8.GetBytes(header[prefix.Length..].Trim()));
+        var presented = SHA256.HashData(Encoding.UTF8.GetBytes(key));
         foreach (var client in keys.Value.Clients)
         {
             if (CryptographicOperations.FixedTimeEquals(presented, Convert.FromHexString(client.KeySha256)))
@@ -178,13 +205,20 @@ public sealed class ApiKeyAuthenticationHandler(
 
 public static class ApiKeyAuthenticationExtensions
 {
-    public static IServiceCollection AddApiKeyAuthentication(this IServiceCollection services, IConfiguration configuration)
+    /// <summary>Merchants authenticate with API keys; reviewers with the session they open by signing in.</summary>
+    public static IServiceCollection AddGatewayAuthentication(this IServiceCollection services, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         services.AddOptions<ApiKeyOptions>().Bind(configuration.GetSection(ApiKeyOptions.SectionName)).ValidateOnStart();
         services.AddSingleton<IValidateOptions<ApiKeyOptions>, ApiKeyOptionsValidator>();
-        services.AddAuthentication(ApiKeyAuthenticationHandler.SchemeName)
-            .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, configureOptions: null);
+        services.AddAuthentication(GatewayAuthentication.Scheme)
+            .AddPolicyScheme(GatewayAuthentication.Scheme, displayName: null, options =>
+                options.ForwardDefaultSelector = context =>
+                    ReviewerAccessService.IsSessionToken(GatewayAuthentication.BearerToken(context.Request))
+                        ? ReviewerSessionAuthenticationHandler.SchemeName
+                        : ApiKeyAuthenticationHandler.SchemeName)
+            .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, configureOptions: null)
+            .AddScheme<AuthenticationSchemeOptions, ReviewerSessionAuthenticationHandler>(ReviewerSessionAuthenticationHandler.SchemeName, configureOptions: null);
         services.AddAuthorizationBuilder()
             .AddPolicy(ApiPolicies.Merchant, policy => policy.RequireRole(ApiPolicies.Merchant))
             .AddPolicy(ApiPolicies.Reviewer, policy => policy.RequireRole(ApiPolicies.Reviewer));

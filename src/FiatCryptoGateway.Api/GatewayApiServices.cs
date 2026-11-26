@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FiatCryptoGateway.Api.Auth;
+using FiatCryptoGateway.Api.Review;
 using FiatCryptoGateway.Application;
 using FiatCryptoGateway.Sandbox;
 
@@ -19,7 +20,8 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddGatewayCore(configuration);
         services.AddSandboxProviders(configuration);
         services.AddGatewayStorage(configuration);
-        services.AddApiKeyAuthentication(configuration);
+        services.AddGatewayAuthentication(configuration);
+        services.AddReviewerSignInLimit();
         services.AddHealthChecks();
         services.ConfigureHttpJsonOptions(options =>
         {

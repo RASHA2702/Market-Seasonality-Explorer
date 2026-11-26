@@ -104,7 +104,7 @@ not the customer.
 - Money from a rejected order is frozen and reported: a reviewer records the report's reference. It can
   only be refunded later through an explicit, reasoned release. There is no path from rejected straight to
   refund, in the code or in the database.
-- Reviewers use their own API keys (role `Reviewer`). The queue lists held orders longest-waiting first and
+- Reviewers sign in with their own accounts and two-factor authentication (see Reviewer sign-in). The queue lists held orders longest-waiting first and
   flags any waiting longer than `Gateway:Compliance:ReviewSlaHours` (24). Every decision (approve, reject,
   freeze, release) needs a reason and is kept in an append-only log with the reviewer and time.
 - Limits per KYC level, in the pivot currency: per payment, per rolling 24 hours and per rolling 30 days
@@ -222,21 +222,48 @@ check, and changed under a per-merchant lock on every instance.
 
 `GET /review` serves the compliance officer's console: one page, embedded in the API, that holds no data.
 
-- **Same rules as the API.** After sign-in the page calls the reviewer endpoints like any other client, with the key
-  as a bearer token. The `Reviewer` role check, the required reasons, the rule that a sanctioned wallet cannot be
-  approved and the append-only review log all apply unchanged; the page adds no authority of its own.
-- **The key.** Held in a JavaScript variable only: never in browser storage, a cookie or an address. With no cookie
-  there is nothing for cross-site request forgery to ride on, and reloading or closing the page forgets the key.
-  Thirty minutes without activity signs out.
+- **Same rules as the API.** After sign-in the page calls the reviewer endpoints like any other client, with the
+  session token as a bearer token. The `Reviewer` role check, the required reasons, the rule that a sanctioned wallet
+  cannot be approved and the append-only review log all apply unchanged; the page adds no authority of its own.
+- **The session token.** Held in a JavaScript variable only: never in browser storage, a cookie or an address. With
+  no cookie there is nothing for cross-site request forgery to ride on, and reloading or closing the page forgets the
+  token. Signing out, or 30 minutes without activity, also ends the session on the server.
 - **Lockdown.** The checkout page's headers (`default-src 'none'`, a per-response nonce for the one style and the
   one script, `connect-src 'self'`, `frame-ancestors 'none'`, no caching, no referrer, no indexing), plus
-  `form-action 'none'`: no form ever submits by itself, so a typed key can never end up in an address bar or a
-  server log. Everything from the API is written into the page as text, never as HTML, so a merchant name, label
+  `form-action 'none'`: no form ever submits by itself, so a typed password can never end up in an address bar or
+  a server log. Everything from the API is written into the page as text, never as HTML, so a merchant name, label
   or error message cannot add markup or script.
 - **What it shows.** Held and frozen payments, wallets under review, the latest reconciliation run per provider and
   day with its differences, notifications given up on in the last 7 days (listed newest first from a partial index
   on `dead_at`) and whether the ledger balances. `Gateway:Review:ConsoleEnabled=false` turns the page off; the
   API is unaffected.
+
+## Reviewer sign-in
+
+Each reviewer is a person with their own account; there are no reviewer API keys (an API client with the `Reviewer`
+role stops startup). Accounts are settings under `Gateway:Review:Reviewers`, made by the setup command
+(`src/FiatCryptoGateway.ReviewerSetup`) on the reviewer's own computer.
+
+- **Two factors.** A password, stored only as PBKDF2-HMAC-SHA256 with a random salt and 600,000 iterations (startup
+  refuses weaker hashes), and a time-based code (RFC 6238: HMAC-SHA1, 6 digits, 30 seconds) from an authenticator app
+  holding a 160-bit key. Codes from one step either side of now are accepted for clock drift, but each step works
+  once: the last step used is stored, and using it is an atomic database update, so the same code cannot open two
+  sessions even on two instances at the same moment.
+- **Failures.** Every failure answers the same `SIGN_IN_FAILED`: unknown username, wrong password or code, a reused
+  code or a paused sign-in. An unknown username is checked against a decoy hash, so it takes as long as a real one,
+  and what was typed as a username is never logged (it may be a password). Five failures in a row pause sign-in for
+  15 minutes; attempts during the pause are logged but do not lengthen it. Before any password is checked, each
+  network address may make 10 sign-in requests a minute, which also stops password hashing being used to load the
+  server.
+- **Sessions.** A session token is `rvs_` and 256 random bits; only its SHA-256 is stored. Requests with a session
+  token are authenticated by the session handler, everything else by the API-key handler, and the token is checked
+  against the store on every request. A session ends on sign-out, after 30 minutes without use, after 12 hours, or
+  when the reviewer's settings are removed or their password hash or authenticator key changes (the session records a
+  fingerprint of both). Reviewer principals carry only the `Reviewer` role, so they cannot use merchant endpoints.
+- **Evidence.** Sign-ins, failures, pauses, refused attempts and sign-outs go to an append-only log; sessions are
+  kept, and the database lets a session only be used and then ended once. A reviewer's decisions are recorded under
+  their username. After sign-in the console shows the previous sign-in and how many attempts failed since, so a
+  reviewer notices someone else trying.
 
 ## Persistence
 
@@ -268,8 +295,9 @@ The schema enforces in the database what the domain enforces in code:
 
 - Off-ramp (crypto → fiat).
 - Any real provider adapter, real KYC, real prices.
-- An admin UI for merchants and their keys (configured through settings for now), and separate reviewer accounts
-  with their own sign-in and two-factor authentication instead of shared API keys.
+- An admin UI for merchants and their keys, and for reviewer accounts (all configured through settings for now):
+  reviewers changing their own password or authenticator, recovery codes, and a reviewer's role limits (for example
+  who may release frozen money).
 - Travel Rule data exchange.
 - Settlement to a merchant's bank account (flow 3), and proof that a merchant controls a registered wallet
   (for example by signing a message), if the partner or the law requires it.

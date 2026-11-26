@@ -10,10 +10,12 @@ var app = builder.Build();
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapHealthChecks("/health");
 app.MapGatewayEndpoints();
 app.MapCheckout();
 app.MapReviewConsole();
+app.MapReviewerAccess();
 
 app.Run();
 
