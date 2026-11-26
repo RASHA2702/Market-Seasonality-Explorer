@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FiatCryptoGateway.Application\FiatCryptoGateway.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Net.Codecrete.QrCodeGenerator" />
+  </ItemGroup>
+</Project>

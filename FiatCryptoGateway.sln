@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FiatCryptoGateway.Persisten
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FiatCryptoGateway.Persistence.Tests", "tests\FiatCryptoGateway.Persistence.Tests\FiatCryptoGateway.Persistence.Tests.csproj", "{E52CAD7C-1288-4C96-B386-E3FE74385487}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FiatCryptoGateway.ReviewerSetup", "src\FiatCryptoGateway.ReviewerSetup\FiatCryptoGateway.ReviewerSetup.csproj", "{3B97D165-55F2-4978-869B-556694B1CFF1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -129,6 +131,18 @@ Global
 		{E52CAD7C-1288-4C96-B386-E3FE74385487}.Release|x64.Build.0 = Release|Any CPU
 		{E52CAD7C-1288-4C96-B386-E3FE74385487}.Release|x86.ActiveCfg = Release|Any CPU
 		{E52CAD7C-1288-4C96-B386-E3FE74385487}.Release|x86.Build.0 = Release|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Debug|x64.Build.0 = Debug|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Debug|x86.Build.0 = Debug|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Release|x64.ActiveCfg = Release|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Release|x64.Build.0 = Release|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Release|x86.ActiveCfg = Release|Any CPU
+		{3B97D165-55F2-4978-869B-556694B1CFF1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -142,5 +156,6 @@ Global
 		{DA51C607-686B-4D57-80F1-11A6D8C6ACE7} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{81E0E9EF-8429-436A-9D24-34A8F38D7ADC} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{E52CAD7C-1288-4C96-B386-E3FE74385487} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{3B97D165-55F2-4978-869B-556694B1CFF1} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
