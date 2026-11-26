@@ -75,6 +75,11 @@ public static class GatewayServiceCollectionExtensions
             .Bind(configuration.GetSection(Reviewers.ReviewerAccessOptions.SectionName))
             .ValidateOnStart();
         services.AddSingleton<Reviewers.ReviewerAccessService>();
+        services.AddSingleton<IValidateOptions<Alerts.AlertOptions>, Alerts.AlertOptionsValidator>();
+        services.AddOptions<Alerts.AlertOptions>().Bind(configuration.GetSection(Alerts.AlertOptions.SectionName)).ValidateOnStart();
+        services.AddSingleton<Alerts.AlertChecks>();
+        services.AddSingleton<Alerts.IAlertSource>(provider => provider.GetRequiredService<Alerts.AlertChecks>());
+        services.AddSingleton<Alerts.AlertService>();
         return services;
     }
 }

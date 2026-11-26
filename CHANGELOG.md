@@ -1,5 +1,16 @@
 # Change log
 
+## 2026-11-26 — Email alerts
+
+- Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (again, as URGENT,
+  when the 24-hour limit passes), reconciliation differences, notifications given up on in the last day, and failed
+  or missing backups. It emails when a problem appears or gets worse, reminds after 12 hours while problems stay
+  open, and says "All clear" once when everything is resolved.
+- Emails go through any SMTP server (MailKit), carry no customer details, and link to the reviewer console. Settings
+  are under `Gateway:Alerts` (`To`, `From`, `Smtp:*`, intervals), checked at startup; alerts are off until `To` is set.
+- The backup container records every attempt in the database, and every alert email sent is logged, so restarts and
+  several instances never repeat an email (migration `011_alerts_and_backup_runs`).
+
 ## 2026-11-26 — Encrypted database backups
 
 - A `backup` container in the Compose stack backs up the database every night at 02:30 India time and once at

@@ -6,4 +6,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Review\ReviewConsole.html" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MailKit" />
+  </ItemGroup>
 </Project>

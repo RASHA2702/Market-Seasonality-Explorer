@@ -29,7 +29,8 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
 | Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
 | Database backups | Every night (and at start), the database is dumped, restored into a scratch database and checked (the ledger balances, nothing is missing), then encrypted to a key you keep off the server. Old local copies are pruned; new ones can be copied off-site. A restore command recovers any backup into a new database, never over the live one. CI backs up, restores and compares on every push. |
-| Tests and CI | 430 .NET tests (23 of them against a real PostgreSQL in Docker), 47 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
+| Email alerts | Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (and again when the 24-hour limit passes), reconciliation differences, notifications given up on, and failed or missing backups. Someone is emailed when something new appears, reminded while problems stay open, and told once when all is clear. Emails carry no customer details and link to the console. |
+| Tests and CI | 445 .NET tests (25 of them against a real PostgreSQL in Docker), 51 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -170,6 +171,38 @@ a cookie, and reloading or closing the page signs you out. After 30 minutes with
 page loads nothing from other sites, cannot be framed, and holds no data of its own.
 `Gateway__Review__ConsoleEnabled=false` stops serving it. In production, consider making `/review` (and the
 `/v1/review` API) reachable only from your internal network or a VPN.
+
+### Email alerts
+
+The gateway can email you when something needs a person, so the console does not have to be watched. Every 5 minutes
+it checks for:
+
+| Problem | When |
+|---|---|
+| A held payment waiting for a decision | After 18 hours (`ReviewWarnAfterHours`), and again, marked URGENT, when its 24-hour limit passes. |
+| A new settlement wallet waiting for review | After 18 hours. |
+| A reconciliation difference | As soon as a run finds one; URGENT when the provider reports money the books do not have. |
+| A merchant notification the gateway gave up on | Within the last day. |
+| A failed database backup, or none for 26 hours | URGENT (container setup only, where backups are recorded). |
+
+An email is sent when a new problem appears or one gets worse, again after 12 hours while problems stay open
+(`RemindAfterHours`), and once with "All clear" when everything is resolved. Emails name orders by their first eight
+characters and merchants by ID, never customers, and link to the reviewer console. With several instances, one checks
+at a time, and what was sent is recorded, so a restart does not repeat it.
+
+Alerts are off until you name who receives them and the mail server that sends them (any provider's SMTP settings;
+port 587 uses STARTTLS). In the container setup, put these in `gateway.env`:
+
+```bash
+Gateway__Alerts__To=you@example.com
+Gateway__Alerts__From=gateway-alerts@example.com
+Gateway__Alerts__Smtp__Host=smtp.example.com
+Gateway__Alerts__Smtp__Username=<from your email provider>
+Gateway__Alerts__Smtp__Password=<from your email provider>
+```
+
+Several addresses are separated by commas. The settings are checked at startup; unencrypted SMTP is accepted only for
+a mail server on the same machine. If an email cannot be sent, the next check tries again.
 
 ### Merchant webhooks
 

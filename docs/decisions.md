@@ -272,3 +272,6 @@ green on its branch), so nothing is lost, and work can resume at any time.
 - Built: the reviewer console at `/review` shows both, with held payments and wallets to review, on one page with a
   count for each, so the morning check is one sign-in. Who does it, and who covers when you are away, is still
   **OPEN**.
+- Built (2026-11-26): email alerts for held payments and wallets nearing or past the review limit, reconciliation
+  differences, failed notifications and failed backups, with reminders and an all-clear. Still **OPEN**: which
+  addresses receive them, and who answers an URGENT alert at night or on holiday.

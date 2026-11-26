@@ -44,6 +44,8 @@ grep -q 'restore check passed' "$work/backup.log" || { cat "$work/backup.log"; f
 newest="$("${compose[@]}" exec -T backup sh -c 'ls -t /backups/gateway-*.dump.age | head -n 1')"
 newest="$(basename "$newest")"
 passed "backed up and restore-checked: $newest"
+[[ "$(sql "$db" "SELECT count(*) FROM ops.backup_run WHERE succeeded AND file = '$newest'")" == 1 ]] || failed "the backup was not recorded in the database"
+passed "the backup is recorded in the database, where alerts watch it"
 
 header="$("${compose[@]}" exec -T backup head -c 21 "/backups/$newest")"
 [[ "$header" == "age-encryption.org/v1" ]] || failed "the backup is not age-encrypted"

@@ -37,6 +37,9 @@ services:
       Gateway__Checkout__BaseUrl: "https://${GATEWAY_DOMAIN:-localhost}"
       # Only the proxy may say which client a request came from.
       Gateway__Proxy__TrustedNetworks: "${GATEWAY_PROXY_ADDRESS:-172.30.10.2}/32"
+      # Alerts (turned on in gateway.env) also watch the backup container's runs and link to the console.
+      Gateway__Alerts__BackupMaxAgeHours: "26"
+      Gateway__Alerts__ConsoleUrl: "https://${GATEWAY_DOMAIN:-localhost}/review"
     depends_on:
       postgres:
         condition: service_healthy

@@ -291,6 +291,20 @@ The schema enforces in the database what the domain enforces in code:
 - a quote backs one order, a provider payment settles one order, quote figures add up.
 
 
+## Alerts
+
+- **What is checked.** `AlertChecks` asks the review queue, the wallet review list, the latest reconciliation run per
+  provider and day, the notifications given up on in the last day, and (when `BackupMaxAgeHours` is set) the backup
+  container's runs in `ops.backup_run`. Each problem has a key that stays the same while it lasts and changes when it
+  gets worse (a held payment's `due` becomes `overdue`).
+- **When to email.** `AlertService` compares the problems with the last email in `ops.alert_log`: new keys mean an
+  email; open problems are emailed again after `RemindAfterHours`; an empty list after problems means one "all
+  clear". A failed send records nothing, so the next check tries again. The check holds a lock (the order lock, on an
+  ID no order has), so instances never send the same email twice.
+- **What an email says.** Short order IDs, merchant IDs, counts and waiting times; no customer IDs, names, amounts or
+  screening details, since email is less protected than the console. Plain text, through any SMTP server (MailKit),
+  with STARTTLS or TLS; unencrypted SMTP only to a server on the same machine.
+
 ## Deployment
 
 The container setup (`Dockerfile`, `docker-compose.yml`, `deploy/`) puts the API behind an HTTPS proxy:

@@ -57,6 +57,8 @@ public sealed class StartupSettingsTests
     [InlineData("Gateway:ApiKeys:Clients:0:CheckoutReturnUrl", "http://merchant.example/return")]
     [InlineData("Gateway:Review:Reviewers:0:TotpSecret", "ABCDEFGH")]                          // far shorter than 160 bits
     [InlineData("Gateway:Review:SessionIdleMinutes", "0")]
+    [InlineData("Gateway:Alerts:To", "ops@example.com")]                                         // no sender or mail server
+    [InlineData("Gateway:Alerts:CheckIntervalMinutes", "0")]
     [InlineData("Gateway:Proxy:TrustedNetworks", "0.0.0.0/0")]                                  // trusting everyone lets anyone spoof
     [InlineData("Gateway:Proxy:TrustedNetworks", "172.30.10.0/24, caddy")]
     [InlineData("Gateway:ApiKeys:Clients:0:DisplayName", " ")]
@@ -104,6 +106,33 @@ public sealed class StartupSettingsTests
         Validate(
             ("Gateway:ApiKeys:Clients:0:WebhookUrl", "http://localhost:9000/hooks"),
             ("Gateway:ApiKeys:Clients:0:WebhookSecret", WebhookSecret));
+    }
+
+    [Fact]
+    public void CompleteAlertSettings_PassStartup()
+    {
+        Validate(
+            ("Gateway:Alerts:To", "ops@example.com, compliance@example.com"),
+            ("Gateway:Alerts:From", "gateway@example.com"),
+            ("Gateway:Alerts:Smtp:Host", "smtp.example.com"),
+            ("Gateway:Alerts:Smtp:Username", "gateway@example.com"),
+            ("Gateway:Alerts:Smtp:Password", "not a real password"),
+            ("Gateway:Alerts:ConsoleUrl", "https://pay.example.com/review"));
+    }
+
+    [Fact]
+    public void UnencryptedMailToAnotherMachine_StopsStartup()
+    {
+        var exception = Assert.Throws<OptionsValidationException>(() => Validate(
+            ("Gateway:Alerts:To", "ops@example.com"),
+            ("Gateway:Alerts:From", "gateway@example.com"),
+            ("Gateway:Alerts:Smtp:Host", "smtp.example.com"),
+            ("Gateway:Alerts:Smtp:Username", "gateway@example.com"),
+            ("Gateway:Alerts:Smtp:Password", "not a real password"),
+            ("Gateway:Alerts:Smtp:Security", "None")));
+
+        Assert.Contains("unencrypted", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("not a real password", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

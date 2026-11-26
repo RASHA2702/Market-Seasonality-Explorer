@@ -33,6 +33,8 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddHostedService<OrderProcessingWorker>();
         services.AddMerchantWebhookDelivery();
         services.AddHostedService<ReconciliationWorker>();
+        services.AddSingleton<Application.Alerts.IAlertSender, Alerts.SmtpAlertSender>();
+        services.AddHostedService<Alerts.AlertWorker>();
         services.AddOptions<Review.ReviewConsoleOptions>().Bind(configuration.GetSection(Review.ReviewConsoleOptions.SectionName));
         return services;
     }
