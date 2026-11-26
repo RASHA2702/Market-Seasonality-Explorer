@@ -43,6 +43,26 @@ public sealed class ComplianceReviewService(
         return items.OrderBy(item => item.HeldSince).ToList().AsReadOnly();
     }
 
+    /// <summary>
+    /// Frozen orders, frozen longest ago first. Their money waits for a person to release it for refund once that
+    /// is allowed; there is no time limit on that, so none is flagged overdue.
+    /// </summary>
+    public async Task<IReadOnlyList<ReviewQueueItem>> GetFrozenAsync(CancellationToken cancellationToken)
+    {
+        var now = time.GetUtcNow();
+        var items = new List<ReviewQueueItem>();
+        foreach (var orderId in await orders.FindByStatusAsync([OrderStatus.Frozen], cancellationToken))
+        {
+            if (await orders.FindAsync(orderId, cancellationToken) is { Status: OrderStatus.Frozen } order)
+            {
+                var frozenSince = order.Events[^1].OccurredAt;
+                items.Add(new ReviewQueueItem(order, frozenSince, now - frozenSince, Overdue: false));
+            }
+        }
+
+        return items.OrderBy(item => item.HeldSince).ToList().AsReadOnly();
+    }
+
     public async Task<PaymentOrder> GetOrderAsync(Guid orderId, CancellationToken cancellationToken) =>
         await orders.FindAsync(orderId, cancellationToken)
             ?? throw new ResourceNotFoundException("ORDER_NOT_FOUND", "The order does not exist.");

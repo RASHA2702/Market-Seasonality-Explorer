@@ -524,6 +524,28 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task GivenUpDeliveries_AreListedAndCanBeSentAgain()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2028, 2, 10, 6, 0, 0, TimeSpan.Zero)); // a day of its own
+        await using var services = fixture.BuildServices(time);
+        var order = await CreateOrderAsync(services);
+        var outbox = services.GetRequiredService<IOutbox>();
+        var message = (await outbox.ListForAggregateAsync(order.OrderId, None))[0];
+        await outbox.MarkDeadAsync(message.MessageId, "HTTP_502", time.GetUtcNow(), None);
+        var other = await CreateOrderAsync(services);
+        var unconfigured = (await outbox.ListForAggregateAsync(other.OrderId, None))[0];
+        await outbox.MarkDeadAsync(unconfigured.MessageId, IOutbox.NoWebhookConfigured, time.GetUtcNow(), None);
+
+        var failed = Assert.Single(await outbox.ListFailedAsync(time.GetUtcNow().AddMinutes(-1), 50, None));
+        Assert.Equal((message.MessageId, "payment_order", order.OrderId, "HTTP_502"), (failed.MessageId, failed.AggregateType, failed.AggregateId, failed.LastError));
+
+        Assert.True(await outbox.RetryAsync(message.MessageId, time.GetUtcNow(), None));
+        Assert.False(await outbox.RetryAsync(message.MessageId, time.GetUtcNow(), None));
+        Assert.Empty(await outbox.ListFailedAsync(time.GetUtcNow().AddMinutes(-1), 50, None));
+        Assert.Contains(await outbox.ClaimDueAsync(time.GetUtcNow(), TimeSpan.FromMinutes(5), 10_000, None), claimed => claimed.MessageId == message.MessageId);
+    }
+
+    [Fact]
     public async Task UnderReviewWallets_AreListedLongestWaitingFirst()
     {
         var time = new ManualTimeProvider(Start);

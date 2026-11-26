@@ -174,8 +174,23 @@ public sealed record OutboxMessageStatus(
     string? LastError);
 
 /// <summary>Merchant notifications. Stores add messages when they save an order; the dispatcher sends them.</summary>
+/// <summary>A notification the gateway gave up delivering, for a person to look at and perhaps send again.</summary>
+public sealed record FailedDelivery(
+    Guid MessageId,
+    string ClientId,
+    string AggregateType,
+    Guid AggregateId,
+    int Sequence,
+    string EventType,
+    int Attempts,
+    string? LastError,
+    DateTimeOffset GaveUpAt);
+
 public interface IOutbox
 {
+    /// <summary>The <c>last_error</c> of a notification for a merchant with no webhook: recorded, but not a failure.</summary>
+    const string NoWebhookConfigured = "NO_WEBHOOK_CONFIGURED";
+
     /// <summary>
     /// Claims up to <paramref name="limit"/> due messages, at most the earliest pending one per order (so
     /// each order's events go out in sequence), and hides them from other instances for <paramref name="lease"/>.
@@ -188,6 +203,18 @@ public interface IOutbox
 
     /// <summary>Stops retrying a message; it stays recorded with the last error.</summary>
     Task MarkDeadAsync(Guid messageId, string failure, DateTimeOffset at, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deliveries given up on since <paramref name="since"/>, newest first. Notifications for merchants without a
+    /// webhook are not failures and are left out.
+    /// </summary>
+    Task<IReadOnlyList<FailedDelivery>> ListFailedAsync(DateTimeOffset since, int limit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Puts a delivery that was given up on back in line, due at once; one more failure gives up again. Returns false
+    /// if there is no such delivery or it was not given up on.
+    /// </summary>
+    Task<bool> RetryAsync(Guid messageId, DateTimeOffset now, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<OutboxMessageStatus>> ListForAggregateAsync(Guid aggregateId, CancellationToken cancellationToken);
 }

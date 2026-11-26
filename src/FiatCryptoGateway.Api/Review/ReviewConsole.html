@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Compliance console</title>
+<style nonce="__NONCE__">
+:root { color-scheme: light dark; --bg: #f3f4f6; --card: #ffffff; --text: #15171c; --muted: #5a6170; --line: #dfe2e8; --accent: #1d4ed8; --on-accent: #ffffff; --ok: #0f7a45; --warn: #8a4b00; --danger: #b42318; --chip: #eef1f6; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0e1014; --card: #171a20; --text: #eef0f4; --muted: #a3a9b5; --line: #2b303a; --accent: #6d94ff; --on-accent: #0a0c10; --ok: #45c98b; --warn: #f2b25c; --danger: #ff8a80; --chip: #222733; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; }
+.bar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; }
+.tag { margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); font-size: 12px; font-weight: 600; }
+.session { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+main { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+.narrow { max-width: 440px; margin: 48px auto; }
+h1 { margin: 0 0 8px; font-size: 22px; }
+h2 { margin: 0 0 4px; font-size: 18px; }
+h3 { margin: 16px 0 6px; font-size: 14px; }
+.lead { margin: 0 0 14px; color: var(--muted); }
+label { display: block; font-weight: 600; margin: 10px 0 4px; }
+input, textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; }
+textarea { resize: vertical; }
+button { padding: 9px 14px; border: 0; border-radius: 10px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+button.danger { background: var(--danger); color: #ffffff; }
+button:disabled { opacity: 0.6; cursor: progress; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.error { color: var(--danger); margin: 8px 0 0; }
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.tile { display: block; padding: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; color: var(--text); text-decoration: none; }
+.tile .count { display: block; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile .label { display: block; color: var(--muted); font-size: 13px; }
+.tile .hint { display: block; color: var(--danger); font-size: 12px; font-weight: 600; min-height: 18px; }
+.tile.attention { border-color: var(--warn); }
+.tile .count.good { color: var(--ok); }
+.tile .count.bad { color: var(--danger); }
+.updated { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.item { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 10px; }
+.item.overdue { border-color: var(--danger); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.amount { font-size: 17px; font-weight: 700; }
+.muted { color: var(--muted); }
+.badge { padding: 2px 8px; border-radius: 999px; background: var(--chip); font-size: 12px; font-weight: 600; }
+.badge.warn { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.badge.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 10px 0; font-size: 14px; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chip { padding: 2px 8px; border-radius: 6px; background: var(--chip); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.decisions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.decision-form { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.decision-form .row { margin-top: 10px; }
+details { margin-top: 8px; }
+summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+th { color: var(--muted); font-weight: 600; }
+.empty { color: var(--muted); margin: 8px 0 0; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 0 0 8px; }
+.inline-form label { margin: 0; }
+.inline-form input { width: auto; }
+.table-scroll { overflow-x: auto; }
+</style>
+</head>
+<body data-time-zone="__TIME_ZONE__" data-sandbox="__SANDBOX__">
+<header class="bar">
+  <div class="brand">Compliance console<span class="tag" id="mode-tag" hidden>Sandbox</span></div>
+  <div class="session" id="session" hidden>
+    <button type="button" class="secondary" id="refresh">Refresh</button>
+    <button type="button" class="secondary" id="sign-out">Sign out</button>
+  </div>
+</header>
+<main>
+  <section class="card narrow" id="sign-in">
+    <h1>Sign in</h1>
+    <p class="lead">Enter your reviewer key. It stays in this page only: reloading the page, signing out or 30 minutes without activity forgets it.</p>
+    <form id="sign-in-form">
+      <label for="key">Reviewer key</label>
+      <input id="key" name="password" type="password" autocomplete="current-password" spellcheck="false" required>
+      <p class="error" id="sign-in-error" role="alert" hidden></p>
+      <p><button type="submit">Open the console</button></p>
+    </form>
+  </section>
+
+  <div id="console" hidden>
+    <nav class="summary" aria-label="Summary">
+      <a class="tile" href="#held"><span class="count" id="count-held">0</span><span class="label">Held payments</span><span class="hint" id="hint-held"></span></a>
+      <a class="tile" href="#wallets"><span class="count" id="count-wallets">0</span><span class="label">Wallets to review</span><span class="hint"></span></a>
+      <a class="tile" href="#frozen"><span class="count" id="count-frozen">0</span><span class="label">Frozen payments</span><span class="hint"></span></a>
+      <a class="tile" href="#reconciliation"><span class="count" id="count-differences">0</span><span class="label">Reconciliation differences</span><span class="hint"></span></a>
+      <a class="tile" href="#failed"><span class="count" id="count-failed">0</span><span class="label">Failed notifications</span><span class="hint"></span></a>
+      <div class="tile"><span class="count" id="ledger-state">–</span><span class="label">Ledger</span><span class="hint"></span></div>
+    </nav>
+    <p class="updated" id="updated" aria-live="polite"></p>
+    <p class="error" id="console-error" role="alert" hidden></p>
+
+    <section class="card" id="held">
+      <h2>Held payments</h2>
+      <p class="lead">Paid, and waiting for your decision, longest first. Approving lets the payment settle to the merchant. Rejecting holds the money until you record the report you filed.</p>
+      <div id="held-list"></div>
+    </section>
+
+    <section class="card" id="wallets">
+      <h2>Wallets to review</h2>
+      <p class="lead">Merchants' new settlement wallets whose screening found risk or could not finish. A wallet on a sanctions list can only be rejected.</p>
+      <div id="wallet-list"></div>
+    </section>
+
+    <section class="card" id="frozen">
+      <h2>Frozen payments</h2>
+      <p class="lead">Money from rejected payments, frozen and reported. Release it for refund only when that is allowed.</p>
+      <div id="frozen-list"></div>
+    </section>
+
+    <section class="card" id="reconciliation">
+      <h2>Reconciliation</h2>
+      <p class="lead">Differences between providers' daily reports and the books, from the latest run of each day. "Not in our books" usually means a customer paid but the order did not move.</p>
+      <form class="inline-form" id="reconcile-form">
+        <label for="reconcile-day">Reconcile a finished day</label>
+        <input id="reconcile-day" type="date" required>
+        <button type="submit" class="secondary">Run</button>
+      </form>
+      <p class="error" id="reconcile-error" role="alert" hidden></p>
+      <div id="reconciliation-list"></div>
+    </section>
+
+    <section class="card" id="failed">
+      <h2>Failed notifications</h2>
+      <p class="lead">Merchant notifications the gateway gave up on in the last 7 days. Sending again tries once more now; it may arrive after newer notifications, so merchants should go by its sequence number.</p>
+      <div id="failed-list"></div>
+    </section>
+  </div>
+</main>
+<script nonce="__NONCE__">
+(() => {
+  'use strict';
+  const IDLE_LIMIT_MS = 30 * 60 * 1000;
+  const zone = document.body.dataset.timeZone || 'UTC';
+  const byId = (id) => document.getElementById(id);
+  let key = null;
+  let lastActivity = Date.now();
+
+  if (document.body.dataset.sandbox === 'true') { byId('mode-tag').hidden = false; }
+
+  // Builds elements. Text always goes in as text, never as HTML.
+  function h(tag, attributes, ...children) {
+    const node = document.createElement(tag);
+    for (const [name, value] of Object.entries(attributes || {})) {
+      if (value === null || value === undefined || value === false) { continue; }
+      if (name === 'class') { node.className = value; }
+      else if (name === 'text') { node.textContent = value; }
+      else if (name.startsWith('on')) { node.addEventListener(name.slice(2), value); }
+      else { node.setAttribute(name, value === true ? '' : String(value)); }
+    }
+    for (const child of children.flat(Infinity)) {
+      if (child === null || child === undefined || child === false) { continue; }
+      node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
+  }
+
+  const dateTime = (() => {
+    const options = { dateStyle: 'medium', timeStyle: 'short' };
+    try { return new Intl.DateTimeFormat('en-IN', { ...options, timeZone: zone }); }
+    catch { return new Intl.DateTimeFormat('en-IN', { ...options, timeZone: 'UTC' }); }
+  })();
+  const when = (iso) => (iso ? dateTime.format(new Date(iso)) : '–');
+  // Amounts as an Indian reader writes them (₹4,50,000.00); assets without an ISO currency code keep their code.
+  const money = (amount, currency) => {
+    if (amount === null || amount === undefined) { return '–'; }
+    try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency, minimumFractionDigits: 2 }).format(Number(amount)); }
+    catch { return amount + ' ' + currency; }
+  };
+  const moneyText = (text) => { const [amount, currency] = String(text).split(' '); return money(amount, currency); };
+  const short = (id) => String(id).slice(0, 8).toUpperCase();
+  const pairs = (entries) => h('dl', null, entries.filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([label, value]) => [h('dt', { text: label }), h('dd', null, value)]));
+
+  class ApiError extends Error {
+    constructor(status, code, message) { super(message); this.status = status; this.code = code; }
+  }
+
+  async function api(path, method = 'GET', body = undefined) {
+    const headers = { Authorization: 'Bearer ' + key, Accept: 'application/json' };
+    if (body !== undefined) { headers['Content-Type'] = 'application/json'; }
+    const response = await fetch(path, {
+      method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+      cache: 'no-store', credentials: 'omit', redirect: 'error',
+    });
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError(response.status, 'NOT_A_REVIEWER', 'This key is not accepted as a reviewer key.');
+    }
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!response.ok) {
+      throw new ApiError(response.status, data?.error?.code ?? 'ERROR', data?.error?.message ?? 'The request failed (' + response.status + ').');
+    }
+    return data;
+  }
+
+  function show(target, error) {
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+      signOut(error.message);
+      return;
+    }
+    target.textContent = error.message || String(error);
+    target.hidden = false;
+  }
+
+  function fill(listId, items, render, emptyText) {
+    const list = byId(listId);
+    list.replaceChildren(...(items.length ? items.map(render) : [h('p', { class: 'empty', text: emptyText })]));
+  }
+
+  // A decision button that opens a small form asking for the reason, and the report reference when freezing.
+  function decision(label, path, { danger = false, reportReference = false } = {}) {
+    return h('button', {
+      type: 'button', class: danger ? 'danger' : null, text: label,
+      onclick: (event) => {
+        const item = event.currentTarget.closest('.item');
+        item.querySelector('.decision-form')?.remove();
+        const reason = h('textarea', { rows: '3', maxlength: '2000', required: true, id: 'reason-' + Math.random().toString(36).slice(2) });
+        const reference = reportReference ? h('input', { type: 'text', maxlength: '200', required: true, id: 'reference-' + Math.random().toString(36).slice(2) }) : null;
+        const error = h('p', { class: 'error', role: 'alert', hidden: true });
+        const confirm = h('button', { type: 'submit', class: danger ? 'danger' : null, text: label });
+        const form = h('form', { class: 'decision-form' },
+          h('label', { for: reason.id, text: 'Reason, kept with your decision' }), reason,
+          reference ? [h('label', { for: reference.id, text: 'Reference of the report you filed' }), reference] : null,
+          error,
+          h('div', { class: 'row' }, confirm, h('button', { type: 'button', class: 'secondary', text: 'Cancel', onclick: () => form.remove() })));
+        form.addEventListener('submit', async (submitEvent) => {
+          submitEvent.preventDefault();
+          confirm.disabled = true;
+          try {
+            const body = { reason: reason.value.trim() };
+            if (reference) { body.reportReference = reference.value.trim(); }
+            await api(path, 'POST', body);
+            await refresh();
+          } catch (failure) {
+            show(error, failure);
+            confirm.disabled = false;
+          }
+        });
+        item.append(form);
+        reason.focus();
+      },
+    });
+  }
+
+  // The order's full record, loaded when opened.
+  function history(orderId) {
+    const body = h('div', null, h('p', { class: 'muted', text: 'Loading…' }));
+    const details = h('details', null, h('summary', { text: 'Screening, history and decisions' }), body);
+    details.addEventListener('toggle', async () => {
+      if (!details.open || details.dataset.loaded) { return; }
+      details.dataset.loaded = 'yes';
+      try {
+        const record = await api('/v1/review/orders/' + orderId);
+        body.replaceChildren(
+          h('h3', { text: 'Screening' }),
+          table(['Outcome', 'Reasons', 'Screener', 'At'], record.complianceHistory.map((d) => [d.outcome, d.reasons.join(', '), d.screener, when(d.decidedAt)])),
+          h('h3', { text: 'Order history' }),
+          table(['#', 'From', 'To', 'Reason', 'At'], record.order.events.map((e) => [e.sequence, e.from ?? '', e.to, e.reason, when(e.occurredAt)])),
+          h('h3', { text: 'Decisions' }),
+          record.reviewActions.length
+            ? table(['Action', 'By', 'Reason', 'Report', 'At'], record.reviewActions.map((a) => [a.action, a.reviewer, a.reason, a.reportReference ?? '', when(a.occurredAt)]))
+            : h('p', { class: 'muted', text: 'None yet.' }));
+      } catch (failure) {
+        delete details.dataset.loaded;
+        body.replaceChildren(h('p', { class: 'error', text: failure.message }));
+      }
+    });
+    return details;
+  }
+
+  function table(headings, rows) {
+    return h('div', { class: 'table-scroll' }, h('table', null,
+      h('thead', null, h('tr', null, headings.map((heading) => h('th', { text: heading })))),
+      h('tbody', null, rows.map((row) => h('tr', null, row.map((cell) => h('td', null, cell)))))));
+  }
+
+  function renderHeld(items) {
+    const overdue = items.filter((item) => item.overdue).length;
+    byId('count-held').textContent = items.length;
+    byId('hint-held').textContent = overdue ? overdue + ' overdue' : '';
+    fill('held-list', items, (item) => h('article', { class: 'item' + (item.overdue ? ' overdue' : '') },
+      h('div', { class: 'row' },
+        h('span', { class: 'amount', text: money(item.sourceAmount, item.sourceCurrency) }),
+        h('span', { class: 'muted', text: 'about ' + moneyText(item.pivotAmount) }),
+        item.overdue ? h('span', { class: 'badge warn', text: 'Overdue' }) : null,
+        h('span', { class: 'badge', text: item.status === 'ComplianceReview' ? 'Needs a decision' : 'Rejected: freeze and report' })),
+      pairs([
+        ['Merchant', item.merchant], ['Customer', item.customerId],
+        ['Held since', when(item.heldSince) + ' (' + item.waitingHours + ' h)'], ['Order', h('code', { text: item.orderId })],
+      ]),
+      h('div', { class: 'chips' }, item.reasons.map((reason) => h('span', { class: 'chip', text: reason }))),
+      history(item.orderId),
+      h('div', { class: 'decisions' }, item.status === 'ComplianceReview'
+        ? [decision('Approve', '/v1/review/orders/' + item.orderId + '/approve'),
+           decision('Reject', '/v1/review/orders/' + item.orderId + '/reject', { danger: true })]
+        : [decision('Freeze and report', '/v1/review/orders/' + item.orderId + '/freeze', { danger: true, reportReference: true })])),
+      'Nothing is waiting for a decision.');
+  }
+
+  function renderFrozen(items) {
+    byId('count-frozen').textContent = items.length;
+    fill('frozen-list', items, (item) => h('article', { class: 'item' },
+      h('div', { class: 'row' }, h('span', { class: 'amount', text: money(item.sourceAmount, item.sourceCurrency) }), h('span', { class: 'badge', text: 'Frozen' })),
+      pairs([
+        ['Merchant', item.merchant], ['Customer', item.customerId], ['Frozen since', when(item.heldSince)],
+        ['Report', item.reportReference], ['Order', h('code', { text: item.orderId })],
+      ]),
+      history(item.orderId),
+      h('div', { class: 'decisions' }, decision('Release for refund', '/v1/review/orders/' + item.orderId + '/release'))),
+      'No frozen payments.');
+  }
+
+  function renderWallets(wallets) {
+    byId('count-wallets').textContent = wallets.length;
+    fill('wallet-list', wallets, (wallet) => h('article', { class: 'item' },
+      h('div', { class: 'row' },
+        h('strong', { text: wallet.network }),
+        h('span', { class: 'badge' + (wallet.screeningRisk === 'Blocked' ? ' warn' : ''), text: 'Screening: ' + wallet.screeningRisk })),
+      pairs([
+        ['Merchant', wallet.merchant], ['Address', h('code', { text: wallet.address })], ['Label', wallet.label],
+        ['Screened by', wallet.screener + (wallet.screeningReference ? ' (' + wallet.screeningReference + ')' : '')],
+        ['Registered', when(wallet.registeredAt)], ['Usable from', when(wallet.usableFrom) + ' if approved'],
+      ]),
+      h('div', { class: 'decisions' }, [
+        wallet.screeningRisk === 'Blocked' ? null : decision('Approve', '/v1/review/settlement-wallets/' + wallet.walletId + '/approve'),
+        decision('Reject', '/v1/review/settlement-wallets/' + wallet.walletId + '/reject', { danger: true }),
+      ])),
+      'No wallets are waiting for review.');
+  }
+
+  const differenceNames = {
+    MISSING_IN_LEDGER: 'Not in our books', MISSING_IN_REPORT: 'Not in the provider’s report', AMOUNT_MISMATCH: 'Different amounts',
+    DUPLICATE_IN_LEDGER: 'Booked twice', DUPLICATE_IN_REPORT: 'Reported twice',
+  };
+
+  function renderReconciliation(runs) {
+    const latest = new Map();
+    for (const run of runs) {
+      const key = run.provider + '|' + run.day;
+      if (!latest.has(key)) { latest.set(key, run); } // runs arrive newest first
+    }
+    const withDifferences = [...latest.values()].filter((run) => !run.clean);
+    byId('count-differences').textContent = withDifferences.reduce((total, run) => total + run.discrepancies.length, 0);
+    const lastClean = [...latest.values()].find((run) => run.clean);
+    fill('reconciliation-list', withDifferences, (run) => h('article', { class: 'item' },
+      h('div', { class: 'row' }, h('strong', { text: run.day }), h('span', { class: 'muted', text: run.provider }),
+        h('span', { class: 'badge warn', text: run.discrepancies.length + (run.discrepancies.length === 1 ? ' difference' : ' differences') })),
+      h('p', { class: 'muted', text: run.matched + ' of ' + run.reportLines + ' reported movements matched; ' + run.ledgerEntries + ' in the books that day. Checked ' + when(run.ranAt) + '.' }),
+      table(['Difference', 'Kind', 'Provider reference', 'Order', 'Report', 'Books'], run.discrepancies.map((d) => [
+        differenceNames[d.type] ?? d.type, d.kind, h('code', { text: d.reference }), d.orderId ? h('code', { text: short(d.orderId) }) : '',
+        d.reportAmount ? money(d.reportAmount, d.reportAsset) : '–', d.ledgerAmount ? money(d.ledgerAmount, d.ledgerAsset) : '–',
+      ]))),
+      lastClean ? 'No differences. The latest clean run checked ' + lastClean.day + ' (' + lastClean.provider + ').' : 'No reconciliation runs yet.');
+  }
+
+  function renderFailed(deliveries) {
+    byId('count-failed').textContent = deliveries.length;
+    const sendAgain = (delivery) => h('button', {
+      type: 'button', class: 'secondary', text: 'Send again',
+      onclick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        try { await api('/v1/review/webhooks/' + delivery.eventId + '/retry', 'POST'); await refresh(); }
+        catch (failure) { show(byId('console-error'), failure); button.disabled = false; }
+      },
+    });
+    byId('failed-list').replaceChildren(deliveries.length
+      ? table(['Notification', 'About', 'Merchant', 'Error', 'Attempts', 'Gave up', ''], deliveries.map((delivery) => [
+        delivery.eventType, (delivery.about === 'payment_order' ? 'Order ' : 'Wallet ') + short(delivery.aboutId), delivery.merchant,
+        h('span', { class: 'badge warn', text: delivery.lastError ?? 'Failed' }), delivery.attempts, when(delivery.gaveUpAt), sendAgain(delivery),
+      ]))
+      : h('p', { class: 'empty', text: 'No failed notifications in the last 7 days.' }));
+  }
+
+  function renderLedger(balances) {
+    const state = byId('ledger-state');
+    state.textContent = balances.balancedPerAsset ? 'Balanced' : 'Out of balance';
+    state.className = 'count ' + (balances.balancedPerAsset ? 'good' : 'bad');
+  }
+
+  async function refresh() {
+    const [held, frozen, wallets, runs, failed, ledger] = await Promise.all([
+      api('/v1/review/queue'), api('/v1/review/frozen'), api('/v1/review/settlement-wallets'),
+      api('/v1/review/reconciliation/runs?limit=60'), api('/v1/review/webhooks/failed?days=7'), api('/v1/review/ledger/balances'),
+    ]);
+    renderHeld(held);
+    renderFrozen(frozen);
+    renderWallets(wallets);
+    renderReconciliation(runs);
+    renderFailed(failed);
+    renderLedger(ledger);
+    byId('console-error').hidden = true;
+    byId('updated').textContent = 'Updated ' + when(new Date().toISOString()) + '.';
+    for (const tile of document.querySelectorAll('.tile')) {
+      const count = tile.querySelector('.count');
+      tile.classList.toggle('attention', Boolean(count && /^[1-9]/.test(count.textContent)));
+    }
+  }
+
+  function signOut(message) {
+    key = null;
+    for (const id of ['held-list', 'wallet-list', 'frozen-list', 'reconciliation-list', 'failed-list']) { byId(id).replaceChildren(); }
+    byId('console').hidden = true;
+    byId('session').hidden = true;
+    byId('sign-in').hidden = false;
+    const error = byId('sign-in-error');
+    error.textContent = message || '';
+    error.hidden = !message;
+    byId('key').focus();
+  }
+
+  byId('sign-in-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const field = byId('key');
+    key = field.value.trim();
+    field.value = '';
+    const button = event.currentTarget.querySelector('button');
+    button.disabled = true;
+    try {
+      await api('/v1/review/queue'); // one request to check the key before loading everything
+      await refresh();
+      lastActivity = Date.now();
+      byId('sign-in').hidden = true;
+      byId('sign-in-error').hidden = true;
+      byId('console').hidden = false;
+      byId('session').hidden = false;
+    } catch (failure) {
+      key = null;
+      const error = byId('sign-in-error');
+      error.textContent = failure instanceof ApiError && failure.status !== 401 && failure.status !== 403 ? failure.message : 'This key is not accepted as a reviewer key.';
+      error.hidden = false;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  byId('refresh').addEventListener('click', async () => {
+    try { await refresh(); } catch (failure) { show(byId('console-error'), failure); }
+  });
+  byId('sign-out').addEventListener('click', () => signOut('Signed out.'));
+
+  byId('reconcile-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = byId('reconcile-error');
+    error.hidden = true;
+    try {
+      await api('/v1/review/reconciliation/runs', 'POST', { day: byId('reconcile-day').value });
+      await refresh();
+    } catch (failure) { show(error, failure); }
+  });
+
+  for (const name of ['click', 'keydown', 'pointermove', 'scroll']) {
+    document.addEventListener(name, () => { lastActivity = Date.now(); }, { passive: true });
+  }
+  setInterval(() => {
+    if (key && Date.now() - lastActivity > IDLE_LIMIT_MS) { signOut('Signed out after 30 minutes without activity.'); }
+  }, 30000);
+})();
+</script>
+</body>
+</html>

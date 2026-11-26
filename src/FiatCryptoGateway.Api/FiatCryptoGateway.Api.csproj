@@ -3,4 +3,7 @@
     <ProjectReference Include="..\FiatCryptoGateway.Sandbox\FiatCryptoGateway.Sandbox.csproj" />
     <ProjectReference Include="..\FiatCryptoGateway.Persistence.Postgres\FiatCryptoGateway.Persistence.Postgres.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Review\ReviewConsole.html" />
+  </ItemGroup>
 </Project>

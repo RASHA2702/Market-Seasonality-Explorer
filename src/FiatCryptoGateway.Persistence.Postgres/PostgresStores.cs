@@ -707,6 +707,51 @@ public sealed class PostgresOutbox(NpgsqlDataSource dataSource) : IOutbox
             command => command.With("at", at.Utc()).With("failure", failure).With("id", messageId),
             cancellationToken);
 
+    public async Task<IReadOnlyList<FailedDelivery>> ListFailedAsync(DateTimeOffset since, int limit, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT message_id, client_id, aggregate_type, aggregate_id, event_sequence, event_type, attempts, last_error, dead_at
+              FROM ops.outbox_message
+             WHERE dead_at >= @since AND last_error IS DISTINCT FROM @no_webhook
+             ORDER BY dead_at DESC
+             LIMIT @limit
+            """,
+            connection);
+        command.With("since", since.Utc()).With("no_webhook", IOutbox.NoWebhookConfigured).With("limit", limit);
+        var failed = new List<FailedDelivery>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            failed.Add(new FailedDelivery(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetGuid(3),
+                reader.GetInt32(4),
+                reader.GetString(5),
+                reader.GetInt32(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.GetFieldValue<DateTimeOffset>(8)));
+        }
+
+        return failed.AsReadOnly();
+    }
+
+    public async Task<bool> RetryAsync(Guid messageId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE ops.outbox_message SET dead_at = NULL, next_attempt_at = @now
+             WHERE message_id = @id AND dead_at IS NOT NULL AND published_at IS NULL
+            """,
+            connection);
+        command.With("now", now.Utc()).With("id", messageId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     public async Task<IReadOnlyList<OutboxMessageStatus>> ListForAggregateAsync(Guid aggregateId, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);

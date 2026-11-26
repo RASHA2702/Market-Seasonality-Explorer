@@ -23,9 +23,10 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Hosted checkout | Every order comes with a signed link to a mobile-first page the gateway hosts, where the customer sees the merchant, the amount in rupees and the deadline, chooses UPI, card, netbanking or bank transfer, and pays (simulated in the sandbox). Customers see only "waiting for payment", "payment received", "refund started", "refunded" or "expired": compliance holds look like any received payment. The page loads nothing from other sites and cannot be framed. |
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
-| Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state. |
+| Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state and send a given-up notification again. |
+| Reviewer console | One page at `/review` for the compliance officer: held payments to decide, frozen payments to release, wallets to review, reconciliation differences, notifications that failed, and whether the ledger balances. It signs in with a reviewer key, keeps the key only in the page's memory and signs out after 30 minutes without activity. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
-| Tests and CI | 347 .NET tests (19 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
+| Tests and CI | 353 .NET tests (20 of them against a real PostgreSQL in Docker), 39 database constraint tests, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -120,6 +121,29 @@ Sandbox test customers (all in India unless noted): `cust_verified`, `cust_basic
 and `cust_foreign` (United Kingdom, refused by the India-only rule). Special wallet addresses that trigger compliance outcomes
 are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 
+### Reviewer console
+
+Open <http://127.0.0.1:5080/review> and sign in with the reviewer key. One page shows everything waiting for a
+person, with a count for each:
+
+| Section | What you can do |
+|---|---|
+| Held payments | Longest-waiting first, with the screening reasons and an "Overdue" flag after 24 hours. Approve or reject; a rejected payment stays here until you freeze it and record the reference of the report you filed. |
+| Frozen payments | Release one for refund. |
+| Wallets to review | New settlement wallets whose screening found risk or could not finish, with the screening detail. Approve or reject; a sanctioned wallet can only be rejected. |
+| Reconciliation | The latest run for each provider and day, with every difference; reconcile a finished day. |
+| Failed notifications | Merchant notifications given up on in the last 7 days, with the last error. "Send again" gives one another attempt, for example after the merchant has fixed its endpoint. |
+| Ledger | Whether the whole ledger balances. |
+
+Each payment shows its full history on request. Every decision needs a reason and is logged with the reviewer's
+client ID and the time, exactly as through the API, because the page works only through the reviewer API.
+
+The key stays in the page's memory only: it is never saved in the browser, sent in an address or put in a cookie,
+and reloading or closing the page signs you out. After 30 minutes without activity the page signs out by itself. The
+page loads nothing from other sites, cannot be framed, and holds no data of its own; a key without the `Reviewer` role
+is refused. `Gateway__Review__ConsoleEnabled=false` stops serving it. In production, consider making `/review` (and
+the `/v1/review` API) reachable only from your internal network or a VPN.
+
 ### Merchant webhooks
 
 To have a merchant notified of status changes, give its client a webhook URL and a signing secret. Generate
@@ -195,7 +219,10 @@ def verify(secret: str, header: str, raw_body: bytes, tolerance_seconds: int = 3
 
 A failed delivery is retried after 30 seconds, then 1, 2, 4, 8, 16 and 32 minutes, then hourly, up to 10
 attempts (about 3 hours), after which it is recorded as given up. A later notification for the same order or
-wallet waits until the earlier one is delivered or given up. These and other settings are under `Gateway:Webhooks`
+wallet waits until the earlier one is delivered or given up. A reviewer can send a given-up notification again from
+the console (or `POST /v1/review/webhooks/{eventId}/retry`), for example once the merchant has fixed its endpoint.
+It gets one more attempt and keeps its original `id`, so a merchant that did receive it after all can discard the
+copy. It may arrive after later notifications for the same order or wallet; `sequence` says where it belongs. These and other settings are under `Gateway:Webhooks`
 (`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
 `IntervalSeconds`, `Enabled`).
 
@@ -302,9 +329,13 @@ records are kept in memory: after a restart with PostgreSQL storage, payments fr
 | `GET /v1/review/settlement-wallets/{id}/webhooks` | Reviewer keys only: the merchant notifications about a wallet, with their delivery state. |
 | `POST /v1/review/settlement-wallets/{id}/approve`, `/reject`, `/disable` | Reviewer decisions on a wallet, each with a `reason`. A sanctioned wallet cannot be approved. |
 | `GET /v1/review/ledger/balances` | Reviewer keys only: whole-ledger balances across all merchants. |
+| `GET /v1/review/frozen` | Reviewer keys only: frozen payments, oldest first, with the reference of the report filed. |
+| `GET /v1/review/webhooks/failed?days=7` | Reviewer keys only: merchant notifications given up on in the last 1 to 90 days (7 by default), newest first. Merchants without a webhook URL are not listed. |
+| `POST /v1/review/webhooks/{eventId}/retry` | Reviewer keys only: send a given-up notification again (`DELIVERY_NOT_FAILED` if it was delivered or is still being retried). |
+| `GET /review` | The reviewer console (no data in the page itself; it signs in with a reviewer key). |
 | `GET /checkout/{link}`, `GET /checkout/{link}/status` | The customer's payment page and its status (no key: the signed link is the credential). |
 | `POST /checkout/{link}/pay` | Sandbox only: the customer's simulated payment, then back to the page. |
-| `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd` | Reviewer keys only: reconciliation runs, newest first, with every difference found. |
+| `GET /v1/review/reconciliation/runs?day=yyyy-MM-dd&limit=30` | Reviewer keys only: reconciliation runs, newest first, with every difference found. Both parameters are optional. |
 | `POST /v1/review/reconciliation/runs` | Reviewer keys only: reconcile a finished day now (`{"day":"yyyy-MM-dd"}`). |
 
 Errors are `{"error":{"code":"...","message":"..."}}` with stable codes such as `QUOTE_EXPIRED`,
@@ -337,6 +368,6 @@ for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app P
 | `src/FiatCryptoGateway.Application` | Order orchestration, provider interfaces, configuration, the sandbox-only safety gate. |
 | `src/FiatCryptoGateway.Sandbox` | Simulated providers and in-memory stores. Real adapters will sit beside it. |
 | `src/FiatCryptoGateway.Persistence.Postgres` | PostgreSQL stores, cross-instance order locks, and the migration runner. |
-| `src/FiatCryptoGateway.Api` | HTTP API, API-key authentication, background order processing. |
+| `src/FiatCryptoGateway.Api` | HTTP API, API-key authentication, the checkout page, the reviewer console, background workers. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md) and the [partner integration design](docs/partner-integration.md). |

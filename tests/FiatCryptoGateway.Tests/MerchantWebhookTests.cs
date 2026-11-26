@@ -193,6 +193,35 @@ public sealed class MerchantWebhookDispatcherTests
         Assert.NotNull(status.DeadAt);
     }
 
+    [Fact]
+    public async Task GivenUpDeliveries_AreListedAndCanBeSentAgainOnce()
+    {
+        var harness = new Harness(new FixedTargets((Fixtures.ClientId, Target))); // client-b has no webhook
+        harness.Options.MaxAttempts = 1;
+        var failing = Fixtures.Order();
+        var delivered = Fixtures.Order();
+        var quoteForB = Domain.Pricing.QuoteCalculator.Calculate(Fixtures.Inputs() with { ClientId = "client-b" });
+        var noWebhook = PaymentOrder.Create(Guid.NewGuid(), "client-b", "cust_verified", quoteForB, Fixtures.Address, Fixtures.Start, TimeSpan.FromMinutes(15));
+        await harness.Orders.AddAsync(failing, None);
+        await harness.Orders.AddAsync(delivered, None);
+        await harness.Orders.AddAsync(noWebhook, None);
+        harness.Sender.Results.Enqueue(WebhookDeliveryResult.Failed("HTTP_500"));
+        await harness.Dispatcher.DispatchDueAsync(None);
+
+        var failed = Assert.Single(await harness.Outbox.ListFailedAsync(Fixtures.Start.AddDays(-1), 10, None));
+        Assert.Equal((failing.OrderId, "HTTP_500", 1), (failed.AggregateId, failed.LastError, failed.Attempts));
+        Assert.Empty(await harness.Outbox.ListFailedAsync(Fixtures.Start.AddMinutes(1), 10, None)); // only since the given time
+
+        Assert.True(await harness.Outbox.RetryAsync(failed.MessageId, harness.Time.GetUtcNow(), None));
+        Assert.False(await harness.Outbox.RetryAsync(failed.MessageId, harness.Time.GetUtcNow(), None)); // already back in line
+        Assert.Empty(await harness.Outbox.ListFailedAsync(Fixtures.Start.AddDays(-1), 10, None));
+        Assert.Equal(1, await harness.Dispatcher.DispatchDueAsync(None)); // sent again, and delivered this time
+        Assert.NotNull(Assert.Single(await harness.Outbox.ListForAggregateAsync(failing.OrderId, None)).DeliveredAt);
+
+        var deliveredId = Assert.Single(await harness.Outbox.ListForAggregateAsync(delivered.OrderId, None)).MessageId;
+        Assert.False(await harness.Outbox.RetryAsync(deliveredId, harness.Time.GetUtcNow(), None)); // delivered, not given up
+    }
+
     [Theory]
     [InlineData(typeof(HttpRequestException))]
     [InlineData(typeof(TaskCanceledException))] // how an HTTP timeout surfaces

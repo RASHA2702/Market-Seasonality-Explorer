@@ -1,5 +1,19 @@
 # Change log
 
+## 2026-11-26 — Reviewer console
+
+- `/review` is one page for the compliance officer: held payments to approve, reject or freeze and report; frozen
+  payments to release for refund; settlement wallets waiting for review; reconciliation differences, with a button
+  to reconcile a finished day; merchant notifications given up on in the last 7 days; and whether the ledger
+  balances. Each section shows a count, and held payments past 24 hours are flagged.
+- It signs in with a reviewer key and works only through the reviewer API, so the same role check, reasons and
+  review log apply. The key stays in the page's memory (no cookie, no storage), and the page signs out after 30
+  minutes without activity. It loads nothing from other sites, cannot be framed, and no form submits by itself.
+  `Gateway:Review:ConsoleEnabled=false` turns it off.
+- New reviewer endpoints: `GET /v1/review/frozen`, `GET /v1/review/webhooks/failed` and
+  `POST /v1/review/webhooks/{eventId}/retry`, which gives a given-up notification one more attempt with its
+  original ID. Migration `009_failed_deliveries` adds the index behind the failed list.
+
 ## 2026-11-25 — Hosted checkout page
 
 - Every order's `checkoutUrl` now links to a page the gateway hosts. The customer sees the merchant, the amount in

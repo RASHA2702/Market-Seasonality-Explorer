@@ -137,7 +137,7 @@ public sealed partial class MerchantWebhookDispatcher(
             var now = time.GetUtcNow();
             if (targets.Find(message.ClientId) is not { } target)
             {
-                await outbox.MarkDeadAsync(message.MessageId, "NO_WEBHOOK_CONFIGURED", now, cancellationToken);
+                await outbox.MarkDeadAsync(message.MessageId, IOutbox.NoWebhookConfigured, now, cancellationToken);
                 continue;
             }
 

@@ -9,7 +9,7 @@ What has been decided for the crypto payment gateway, what is proposed, and what
 **[Lawyer]** and **[Accountant]** mark points to take to your lawyer or accountant. Nothing in this
 file is legal or tax advice.
 
-Last updated: 2026-11-25.
+Last updated: 2026-11-26.
 
 ## Still needed from you
 
@@ -67,7 +67,10 @@ customers pay on that page.
 ### 6. Who is the compliance officer (MLRO)? Is there an AML/KYC policy? Who reviews held orders, and how fast?
 **ANSWERED** (2026-11-24): you act as the compliance officer for now and review held payments within 24 hours.
 - Built: the review queue shows how long each held payment has waited and flags any older than 24 hours;
-  you use a reviewer API key, and every decision is logged with your name and reason.
+  you use a reviewer API key, and every decision is logged with your name and reason. The reviewer console at
+  `/review` puts the queue, frozen payments and wallets waiting for review on one page.
+- Proposed: one reviewer key per person, never shared, so the log shows who decided. Separate reviewer accounts
+  with two-factor sign-in are worth adding before more people review.
 - Written AML/KYC policy: **OPEN**.
 - **[Lawyer]** Whether your company must formally appoint officers (for example a principal officer and a
   designated director under PMLA) and what its written policy must cover.
@@ -249,3 +252,6 @@ green on its branch), so nothing is lost, and work can resume at any time.
 - Built: daily reconciliation records every difference between providers' reports and the books, and merchant
   webhooks record deliveries that failed. Someone needs to check both each morning. A payment missing from the
   books means a customer has paid for an order that has not moved.
+- Built: the reviewer console at `/review` shows both, with held payments and wallets to review, on one page with a
+  count for each, so the morning check is one sign-in. Who does it, and who covers when you are away, is still
+  **OPEN**.

@@ -30,6 +30,7 @@ public static class GatewayApiServiceCollectionExtensions
         services.AddHostedService<OrderProcessingWorker>();
         services.AddMerchantWebhookDelivery();
         services.AddHostedService<ReconciliationWorker>();
+        services.AddOptions<Review.ReviewConsoleOptions>().Bind(configuration.GetSection(Review.ReviewConsoleOptions.SectionName));
         return services;
     }
 }

@@ -157,6 +157,25 @@ public sealed record WebhookDeliveryResponse(
 
 public sealed record ReconcileRequest(string? Day);
 
+/// <summary>A notification the gateway gave up delivering. <c>About</c> is <c>payment_order</c> or <c>settlement_wallet</c>.</summary>
+public sealed record FailedDeliveryResponse(
+    Guid EventId,
+    string Merchant,
+    string About,
+    Guid AboutId,
+    string EventType,
+    int Attempts,
+    string? LastError,
+    DateTimeOffset GaveUpAt)
+{
+    public static FailedDeliveryResponse From(FailedDelivery delivery)
+    {
+        ArgumentNullException.ThrowIfNull(delivery);
+        return new FailedDeliveryResponse(
+            delivery.MessageId, delivery.ClientId, delivery.AggregateType, delivery.AggregateId, delivery.EventType, delivery.Attempts, delivery.LastError, delivery.GaveUpAt);
+    }
+}
+
 public sealed record RegisterWalletRequest(string? Network, string? Address, string? Label);
 
 public sealed record ReasonRequest(string? Reason);
@@ -298,7 +317,8 @@ public sealed record ReviewQueueItemResponse(
     DateTimeOffset HeldSince,
     double WaitingHours,
     bool Overdue,
-    IReadOnlyList<string> Reasons)
+    IReadOnlyList<string> Reasons,
+    string? ReportReference)
 {
     public static ReviewQueueItemResponse From(Application.Compliance.ReviewQueueItem item)
     {
@@ -315,7 +335,8 @@ public sealed record ReviewQueueItemResponse(
             item.HeldSince,
             Math.Round(item.Waiting.TotalHours, 1),
             item.Overdue,
-            order.Compliance?.Reasons ?? []);
+            order.Compliance?.Reasons ?? [],
+            order.ReportReference);
     }
 }
 

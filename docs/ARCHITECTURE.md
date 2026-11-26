@@ -163,6 +163,9 @@ through the transactional outbox pattern. Each notification belongs to one aggre
 - **Retries.** Failures (a non-2xx answer, a redirect, a timeout, a connection error) are retried with
   exponential backoff; after `MaxAttempts` the message is marked as given up with its last error. Delivery is
   at least once; merchants deduplicate on the event ID.
+- **Sending again.** A reviewer can return a given-up message to the queue. Only a message that was given up on
+  and never delivered can be returned; it keeps its ID and attempt count, so it gets exactly one more attempt. A
+  merchant without a webhook URL is recorded as `NO_WEBHOOK_CONFIGURED`, which is not a failure and is not listed.
 - **Signing.** Each message is signed when it is sent (not when the batch was claimed), with the merchant's
   own secret, using the same scheme as incoming webhooks.
 - **Outbound requests.** Webhook URLs come from the operator's configuration, not from merchants, and must
@@ -215,6 +218,26 @@ check, and changed under a per-merchant lock on every instance.
   partner's report covers purchases and transfers), and provider payouts to the company's bank account are not
   modelled.
 
+## Reviewer console
+
+`GET /review` serves the compliance officer's console: one page, embedded in the API, that holds no data.
+
+- **Same rules as the API.** After sign-in the page calls the reviewer endpoints like any other client, with the key
+  as a bearer token. The `Reviewer` role check, the required reasons, the rule that a sanctioned wallet cannot be
+  approved and the append-only review log all apply unchanged; the page adds no authority of its own.
+- **The key.** Held in a JavaScript variable only: never in browser storage, a cookie or an address. With no cookie
+  there is nothing for cross-site request forgery to ride on, and reloading or closing the page forgets the key.
+  Thirty minutes without activity signs out.
+- **Lockdown.** The checkout page's headers (`default-src 'none'`, a per-response nonce for the one style and the
+  one script, `connect-src 'self'`, `frame-ancestors 'none'`, no caching, no referrer, no indexing), plus
+  `form-action 'none'`: no form ever submits by itself, so a typed key can never end up in an address bar or a
+  server log. Everything from the API is written into the page as text, never as HTML, so a merchant name, label
+  or error message cannot add markup or script.
+- **What it shows.** Held and frozen payments, wallets under review, the latest reconciliation run per provider and
+  day with its differences, notifications given up on in the last 7 days (listed newest first from a partial index
+  on `dead_at`) and whether the ledger balances. `Gateway:Review:ConsoleEnabled=false` turns the page off; the
+  API is unaffected.
+
 ## Persistence
 
 Storage is chosen with `Gateway:Storage:Provider`: `InMemory` (default; lost on restart, one instance only)
@@ -243,9 +266,11 @@ The schema enforces in the database what the domain enforces in code:
 
 ## Deliberately not built yet
 
-- Off-ramp (crypto → fiat) and merchant checkout flows.
+- Off-ramp (crypto → fiat).
 - Any real provider adapter, real KYC, real prices.
-- Admin and reviewer UI, Travel Rule data exchange.
+- An admin UI for merchants and their keys (configured through settings for now), and separate reviewer accounts
+  with their own sign-in and two-factor authentication instead of shared API keys.
+- Travel Rule data exchange.
 - Settlement to a merchant's bank account (flow 3), and proof that a merchant controls a registered wallet
   (for example by signing a message), if the partner or the law requires it.
 - Reconciling provider payouts to the company's bank account.

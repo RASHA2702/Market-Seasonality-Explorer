@@ -56,6 +56,9 @@ public static class GatewayEndpoints
         // The compliance officer's queue and decisions, across all merchants. Reviewer keys only.
         var review = app.MapGroup("/v1/review").RequireAuthorization(ApiPolicies.Reviewer).AddEndpointFilter<GatewayErrorFilter>();
         review.MapGet("/queue", GetReviewQueue);
+        review.MapGet("/frozen", GetFrozenOrders);
+        review.MapGet("/webhooks/failed", ListFailedDeliveries);
+        review.MapPost("/webhooks/{eventId:guid}/retry", RetryDelivery);
         review.MapGet("/orders/{orderId:guid}", GetReviewOrder);
         review.MapPost("/orders/{orderId:guid}/approve", (Guid orderId, ReviewActionRequest? request, ClaimsPrincipal user, ComplianceReviewService reviews, CheckoutLinks links, CancellationToken ct) =>
             Review(orderId, request, ReviewActionKind.Approve, user, reviews, links, ct));
@@ -303,6 +306,41 @@ public static class GatewayEndpoints
         CancellationToken cancellationToken) =>
         (await reviews.GetQueueAsync(cancellationToken)).Select(ReviewQueueItemResponse.From);
 
+    private static async Task<IEnumerable<ReviewQueueItemResponse>> GetFrozenOrders(
+        ComplianceReviewService reviews,
+        CancellationToken cancellationToken) =>
+        (await reviews.GetFrozenAsync(cancellationToken)).Select(ReviewQueueItemResponse.From);
+
+    /// <summary>Notifications given up on in the last <paramref name="days"/> days (7 by default), newest first.</summary>
+    private static async Task<IEnumerable<FailedDeliveryResponse>> ListFailedDeliveries(
+        int? days,
+        IOutbox outbox,
+        TimeProvider time,
+        CancellationToken cancellationToken)
+    {
+        var since = time.GetUtcNow().AddDays(-Math.Clamp(days ?? 7, 1, 90));
+        return (await outbox.ListFailedAsync(since, 200, cancellationToken)).Select(FailedDeliveryResponse.From);
+    }
+
+    /// <summary>Sends a notification that was given up on once more, for example after the merchant fixed its endpoint.</summary>
+    private static async Task<IResult> RetryDelivery(
+        Guid eventId,
+        ClaimsPrincipal user,
+        IOutbox outbox,
+        TimeProvider time,
+        ILogger<ComplianceReviewService> logger,
+        CancellationToken cancellationToken)
+    {
+        var reviewer = user.GetClientId();
+        if (!await outbox.RetryAsync(eventId, time.GetUtcNow(), cancellationToken))
+        {
+            throw new GatewayRuleException("DELIVERY_NOT_FAILED", "Only a notification the gateway gave up on can be sent again.");
+        }
+
+        ReviewLog.DeliveryRetried(logger, reviewer, eventId);
+        return Results.NoContent();
+    }
+
     private static async Task<ReviewOrderResponse> GetReviewOrder(
         Guid orderId,
         ComplianceReviewService reviews,
@@ -461,4 +499,10 @@ internal sealed class GatewayErrorFilter : IEndpointFilter
                 statusCode: StatusCodes.Status404NotFound);
         }
     }
+}
+
+internal static partial class ReviewLog
+{
+    [LoggerMessage(Level = LogLevel.Information, Message = "Reviewer {Reviewer} sent notification {EventId} again.")]
+    public static partial void DeliveryRetried(ILogger logger, string reviewer, Guid eventId);
 }

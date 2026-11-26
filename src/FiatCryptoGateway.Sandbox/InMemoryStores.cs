@@ -301,6 +301,46 @@ public sealed class InMemoryOutbox : IOutbox
             entry.LastError = failure;
         });
 
+    public Task<IReadOnlyList<FailedDelivery>> ListFailedAsync(DateTimeOffset since, int limit, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<FailedDelivery> failed = _entries
+                .Where(entry => entry.DeadAt >= since && entry.LastError != IOutbox.NoWebhookConfigured)
+                .OrderByDescending(entry => entry.DeadAt)
+                .Take(limit)
+                .Select(entry => new FailedDelivery(
+                    entry.Message.MessageId,
+                    entry.Message.ClientId,
+                    entry.Message.AggregateType,
+                    entry.Message.AggregateId,
+                    entry.Message.Sequence,
+                    entry.Message.EventType,
+                    entry.Attempts,
+                    entry.LastError,
+                    entry.DeadAt!.Value))
+                .ToList()
+                .AsReadOnly();
+            return Task.FromResult(failed);
+        }
+    }
+
+    public Task<bool> RetryAsync(Guid messageId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            var entry = _entries.FirstOrDefault(candidate => candidate.Message.MessageId == messageId);
+            if (entry is not { DeadAt: not null, DeliveredAt: null })
+            {
+                return Task.FromResult(false);
+            }
+
+            entry.DeadAt = null;
+            entry.NextAttemptAt = now;
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<IReadOnlyList<OutboxMessageStatus>> ListForAggregateAsync(Guid aggregateId, CancellationToken cancellationToken)
     {
         lock (_gate)

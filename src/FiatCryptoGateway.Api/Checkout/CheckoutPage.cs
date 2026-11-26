@@ -52,14 +52,14 @@ public static class CheckoutPage
     }
 
     /// <summary>Headers for every checkout response: nothing cached, framed, sniffed, indexed or sent on as a referrer.</summary>
-    public static void ApplySecurityHeaders(HttpResponse response, string? nonce = null)
+    public static void ApplySecurityHeaders(HttpResponse response, string? nonce = null, string formAction = "'self'")
     {
         ArgumentNullException.ThrowIfNull(response);
         var headers = response.Headers;
         headers.ContentSecurityPolicy =
             "default-src 'none'; " +
             (nonce is null ? string.Empty : $"style-src 'nonce-{nonce}'; script-src 'nonce-{nonce}'; ") +
-            "img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+            $"img-src 'self' data:; connect-src 'self'; form-action {formAction}; frame-ancestors 'none'; base-uri 'none'";
         headers.XFrameOptions = "DENY";
         headers.XContentTypeOptions = "nosniff";
         headers["Referrer-Policy"] = "no-referrer";
