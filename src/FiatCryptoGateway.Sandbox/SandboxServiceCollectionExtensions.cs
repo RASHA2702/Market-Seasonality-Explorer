@@ -49,6 +49,8 @@ public static class SandboxServiceCollectionExtensions
         services.AddSingleton<IReconciliationStore, InMemoryReconciliationStore>();
         services.AddSingleton<ISettlementStore, InMemorySettlementStore>();
         services.AddSingleton<Application.Reviewers.IReviewerAccessStore, InMemoryReviewerAccessStore>();
+        services.AddSingleton<Application.Alerts.IBackupRunStore, InMemoryBackupRunStore>();
+        services.AddSingleton<Application.Alerts.IAlertLog, InMemoryAlertLog>();
         services.AddSingleton<IStorageInitializer, InMemoryStorageInitializer>();
         return services;
     }

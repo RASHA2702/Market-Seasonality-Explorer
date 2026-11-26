@@ -233,6 +233,8 @@ public static class PostgresServiceCollectionExtensions
         services.AddSingleton<IReconciliationStore, PostgresReconciliationStore>();
         services.AddSingleton<ISettlementStore, PostgresSettlementStore>();
         services.AddSingleton<Application.Reviewers.IReviewerAccessStore, PostgresReviewerAccessStore>();
+        services.AddSingleton<Application.Alerts.IBackupRunStore, PostgresBackupRunStore>();
+        services.AddSingleton<Application.Alerts.IAlertLog, PostgresAlertLog>();
         services.AddSingleton<IStorageInitializer>(provider => new PostgresStorageInitializer(
             provider.GetRequiredService<NpgsqlDataSource>(),
             provider.GetRequiredService<PostgresMigrator>(),

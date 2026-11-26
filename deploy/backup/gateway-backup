@@ -22,15 +22,26 @@ scratch="$(mktemp -d)"
 log() { echo "$(date -u +%FT%TZ) backup: $*"; }
 fail() { echo "$(date -u +%FT%TZ) backup: $*" >&2; exit 1; }
 
+# Each attempt is recorded in the database too (ops.backup_run), where the API's alert check sees failures.
+saved_file=""
+saved_bytes=""
+record() {
+  printf '%s\n' "INSERT INTO ops.backup_run (succeeded, file, bytes, detail) VALUES (:'succeeded', NULLIF(:'file', ''), NULLIF(:'bytes', '')::bigint, NULLIF(:'detail', ''));" |
+    psql -qX -v ON_ERROR_STOP=1 -v succeeded="$1" -v file="$saved_file" -v bytes="$saved_bytes" -v detail="$2" -d "$PGDATABASE" >/dev/null 2>&1 ||
+    log "could not record this attempt in the database" >&2
+}
+
 finish() {
   local status=$?
   rm -rf -- "${scratch:?}"
   psql -qX -d postgres -c "DROP DATABASE IF EXISTS \"${check_db}\"" >/dev/null 2>&1 || true
   if (( status == 0 )); then
     rm -f /tmp/backup-failed
+    record true ""
   else
     date +%s > /tmp/backup-failed
     log "FAILED (exit ${status}); no backup was saved this time" >&2
+    record false "Exit status ${status}; the backup container's log has the details."
   fi
 }
 trap finish EXIT
@@ -83,6 +94,8 @@ mv -- "$dir/$name.partial" "$dir/$name"
 printf '{"file":"%s","createdAt":"%s","bytes":%s,"sha256":"%s","schema":"%s","restoreChecked":true}\n' \
   "$name" "$(date -u +%FT%TZ)" "$bytes" "$sha256" "$schema" > "$dir/${name%.dump.age}.json"
 date +%s > "$dir/.last-success"
+saved_file="$name"
+saved_bytes="$bytes"
 log "saved ${name} (${bytes} bytes, schema ${schema}); restore check passed"
 
 find "$dir" -maxdepth 1 -name 'gateway-*' -type f -mtime +"$keep_days" -print -delete | sed 's/^/  deleted old backup: /'
