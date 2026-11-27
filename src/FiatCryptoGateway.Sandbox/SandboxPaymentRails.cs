@@ -294,6 +294,7 @@ public sealed class InMemoryPaymentAttemptStore : IPaymentAttemptStore
                 throw new InvalidOperationException($"Payment attempt {attempt.AttemptId} already exists.");
             }
 
+            RefuseReusedIdentifiers(attempt);
             if (attempt.WasCaptured && _attempts.Values.Any(other => other.OrderId == attempt.OrderId && other.WasCaptured))
             {
                 throw new PaymentAttemptConcurrencyException("The order already has a captured payment.");
@@ -316,6 +317,7 @@ public sealed class InMemoryPaymentAttemptStore : IPaymentAttemptStore
                 throw new PaymentAttemptConcurrencyException();
             }
 
+            RefuseReusedIdentifiers(attempt);
             if (attempt.WasCaptured && _attempts.Values.Any(other => other.OrderId == attempt.OrderId && other.AttemptId != attempt.AttemptId && other.WasCaptured))
             {
                 throw new PaymentAttemptConcurrencyException("The order already has a captured payment.");
@@ -348,6 +350,20 @@ public sealed class InMemoryPaymentAttemptStore : IPaymentAttemptStore
             attempt => (attempt.CapturedAt >= windowStart && attempt.CapturedAt < windowEnd) || (attempt.RefundedAt >= windowStart && attempt.RefundedAt < windowEnd),
             attempt => attempt.CapturedAt ?? attempt.CreatedAt,
             int.MaxValue));
+
+    /// <summary>What PostgreSQL's unique constraints do: a payment or refund identifier belongs to one attempt only.</summary>
+    private void RefuseReusedIdentifiers(PaymentAttempt attempt)
+    {
+        foreach (var other in _attempts.Values)
+        {
+            if (other.AttemptId != attempt.AttemptId
+                && ((attempt.ProviderPaymentId is not null && other.ProviderPaymentId == attempt.ProviderPaymentId)
+                    || (attempt.RefundId is not null && other.RefundId == attempt.RefundId)))
+            {
+                throw new InvalidOperationException("An attempt, payment or refund identifier was already used by another payment attempt.");
+            }
+        }
+    }
 
     private T Read<T>(Func<T> read)
     {

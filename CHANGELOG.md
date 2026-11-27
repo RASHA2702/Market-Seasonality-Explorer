@@ -1,5 +1,20 @@
 # Change log
 
+## 2026-11-27 — Our own gateway, milestone 1 (part 1): payment attempts and test networks
+
+- Every try to pay an order is now a **payment attempt** with its full history: started, waiting for the customer's
+  bank check, approved, captured, declined, expired, refunded. Only legal steps are allowed, a finished attempt never
+  changes, and an order can have only one captured payment (the database refuses a second one).
+- **No card number or security code is ever stored.** An attempt keeps the brand and last four digits (or the UPI
+  address). The code refuses anything that looks like a card number, and so does the database, a second time.
+- Two simulated payment networks, one for cards and one for UPI, take **test numbers only**. A real card number is
+  refused even if it is valid, and the refusal never repeats what was typed.
+- Attempts are saved in PostgreSQL (migration 012) together with their history, in one transaction. A stale copy
+  cannot overwrite a newer one, and a reused attempt, payment or refund identifier is refused loudly instead of being
+  mistaken for a lost race.
+- Nothing uses these yet: the processor that ties attempts to orders and the checkout forms come next in this milestone.
+- README test counts corrected: 574 .NET tests (36 against PostgreSQL) and 70 database checks.
+
 ## 2026-11-27 — Direction: build our own payment gateway
 
 - Decision recorded: instead of waiting for a payment partner (question 11), we build our own payment gateway as a

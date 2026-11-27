@@ -82,6 +82,43 @@ public sealed class PaymentAttemptStoreTests
     }
 
     [Fact]
+    public async Task AnAttempt_IsAddedOnce()
+    {
+        var attempt = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(attempt, None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _store.AddAsync(attempt, None));
+    }
+
+    [Fact]
+    public async Task APaymentIdentifier_BelongsToOneAttemptOnly_AndReuseIsABugNotALostRace()
+    {
+        var first = await Captured(Start);
+        var other = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(other, None);
+        other.Authorize("rail", Start);
+        other.Capture(first.ProviderPaymentId!, Start);
+
+        // Not a PaymentAttemptConcurrencyException: callers handle that one as a lost race, and this is not one.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _store.SaveAsync(other, None));
+
+        Assert.Equal(PaymentAttemptStatus.Started, (await _store.FindAsync(other.AttemptId, None))!.Status);
+    }
+
+    [Fact]
+    public async Task ARefundIdentifier_BelongsToOneAttemptOnly_AndReuseIsABugNotALostRace()
+    {
+        var refunded = await Captured(Start.AddHours(-30), refundedAt: Start.AddHours(1));
+        var other = await Captured(Start);
+        other.MarkRecordedOnOrder(Start);
+        other.Refund(refunded.RefundId!, Start.AddHours(2));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _store.SaveAsync(other, None));
+
+        Assert.Equal(PaymentAttemptStatus.Captured, (await _store.FindAsync(other.AttemptId, None))!.Status);
+    }
+
+    [Fact]
     public async Task CapturedPayments_NotYetOnTheirOrder_AreListedOldestFirst_UntilRecorded()
     {
         var older = await Captured(Start);
@@ -113,6 +150,10 @@ public sealed class PaymentAttemptStoreTests
         Assert.Equal([late.AttemptId, later.AttemptId], due.Select(attempt => attempt.AttemptId));
         Assert.DoesNotContain(captured.AttemptId, due.Select(attempt => attempt.AttemptId));
         Assert.Single(await _store.ListPendingExpiredAsync(Start.AddMinutes(12), 1, None));
+
+        // Due exactly at its time limit, and not a moment before.
+        Assert.Equal([late.AttemptId], (await _store.ListPendingExpiredAsync(late.ExpiresAt, 10, None)).Select(attempt => attempt.AttemptId));
+        Assert.Empty(await _store.ListPendingExpiredAsync(late.ExpiresAt.AddTicks(-1), 10, None));
     }
 
     [Fact]
@@ -122,14 +163,18 @@ public sealed class PaymentAttemptStoreTests
         var before = await Captured(Start.AddHours(-30));
         var refundedInWindow = await Captured(Start.AddHours(-30), refundedAt: Start.AddHours(2));
         var refundedAfter = await Captured(Start.AddHours(-30), refundedAt: Start.AddHours(30));
+        var atTheStart = await Captured(Start);
+        var atTheEnd = await Captured(Start.AddDays(1));
 
         var settled = await _store.ListSettledBetweenAsync(Start, Start.AddDays(1), None);
 
+        // A window includes its start and excludes its end, so a payment is in exactly one day's report.
         Assert.Equal(
-            new[] { inWindow.AttemptId, refundedInWindow.AttemptId }.Order(),
+            new[] { inWindow.AttemptId, refundedInWindow.AttemptId, atTheStart.AttemptId }.Order(),
             settled.Select(attempt => attempt.AttemptId).Order());
         Assert.DoesNotContain(before.AttemptId, settled.Select(attempt => attempt.AttemptId));
         Assert.DoesNotContain(refundedAfter.AttemptId, settled.Select(attempt => attempt.AttemptId));
+        Assert.DoesNotContain(atTheEnd.AttemptId, settled.Select(attempt => attempt.AttemptId));
     }
 
     private static PaymentAttempt New(Guid orderId, DateTimeOffset at) =>

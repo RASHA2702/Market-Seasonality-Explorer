@@ -153,9 +153,16 @@ public sealed class PaymentAttemptConcurrencyException : Exception
     }
 }
 
-/// <summary>The processor's own records: every attempt, with its history. Nothing here can hold a card number.</summary>
+/// <summary>
+/// The processor's own records: every attempt, with its history. Nothing here can hold a card number.
+/// Saving fails in two different ways. <see cref="PaymentAttemptConcurrencyException"/> is a lost race (the attempt
+/// changed since it was loaded, or the order already has a captured payment), which callers expect and handle. An
+/// <see cref="InvalidOperationException"/> means an attempt, payment or refund identifier was already used by another
+/// attempt: a programming error, never retried and never treated as a race.
+/// </summary>
 public interface IPaymentAttemptStore
 {
+    /// <summary>Stores a new attempt with its history.</summary>
     Task AddAsync(PaymentAttempt attempt, CancellationToken cancellationToken);
 
     /// <summary>Saves a changed attempt with its new history. Throws <see cref="PaymentAttemptConcurrencyException"/> if it changed since it was loaded.</summary>
