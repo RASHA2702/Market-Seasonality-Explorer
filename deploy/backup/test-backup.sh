@@ -54,13 +54,15 @@ passed "the backup file is encrypted"
 
 restore "$newest" "$key_file" gateway_restore_test > "$work/restore.log" || { cat "$work/restore.log"; failed "restoring with the right key failed"; }
 grep -q 'restore check passed' "$work/restore.log" || { cat "$work/restore.log"; failed "the restored database was not checked"; }
-for table in ledger.journal_entry ledger.journal_line gateway.order_event gateway.payment_order; do
+for table in ledger.journal_entry ledger.journal_line gateway.order_event gateway.payment_order gateway.payment_attempt gateway.payment_attempt_event; do
   live="$(sql "$db" "SELECT count(*) FROM $table")"
   copy="$(sql gateway_restore_test "SELECT count(*) FROM $table")"
   [[ "$copy" == "$live" ]] || failed "$table: $copy rows restored, $live in the live database"
 done
 if [[ -n "${SMOKE_MERCHANT_KEY:-}" ]]; then
   [[ "$(sql gateway_restore_test 'SELECT count(*) FROM ledger.journal_entry')" -gt 0 ]] || failed "the restored ledger is empty"
+  # The test order was paid through the gateway's own processor, so its payment attempt and history must be in the copy.
+  [[ "$(sql gateway_restore_test 'SELECT count(*) FROM gateway.payment_attempt')" -gt 0 ]] || failed "the restored payment attempts are empty"
 fi
 sql postgres 'DROP DATABASE gateway_restore_test' >/dev/null
 passed "restored with the private key into a new database that matches the live one"

@@ -131,6 +131,10 @@ public sealed class PostgresPaymentAttemptStore(NpgsqlDataSource dataSource, Ass
         QueryAsync(
             "WHERE status IN ('CAPTURED', 'REFUNDED') AND recorded_on_order_at IS NULL", "captured_at, attempt_id", limit, _ => { }, cancellationToken);
 
+    public Task<IReadOnlyList<PaymentAttempt>> ListStuckAuthorizedAsync(DateTimeOffset cutoff, int limit, CancellationToken cancellationToken) =>
+        QueryAsync(
+            "WHERE status = 'AUTHORIZED' AND updated_at <= @cutoff", "updated_at, attempt_id", limit, command => command.With("cutoff", cutoff.Utc()), cancellationToken);
+
     public Task<IReadOnlyList<PaymentAttempt>> ListPendingExpiredAsync(DateTimeOffset now, int limit, CancellationToken cancellationToken) =>
         QueryAsync(
             "WHERE status IN ('STARTED', 'AWAITING_AUTHENTICATION') AND expires_at <= @now",

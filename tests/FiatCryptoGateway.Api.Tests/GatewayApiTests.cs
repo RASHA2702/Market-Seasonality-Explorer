@@ -55,6 +55,7 @@ public sealed class GatewayApiFactory : WebApplicationFactory<Program>
             builder.UseSetting(key, value);
         }
 
+        builder.UseSetting("Gateway:Fiat:Provider", "SandboxPartner"); // most tests pay by the simulated partner's webhook
         builder.UseSetting("Gateway:Processing:Enabled", "false");
         builder.UseSetting("Gateway:Webhooks:Enabled", "false"); // tests send notifications by calling the dispatcher
         builder.UseSetting("Gateway:Reconciliation:Enabled", "false"); // tests start runs through the API

@@ -20,6 +20,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Ledger | Double entry, balanced per asset, append-only. Every order leaves the customer liability at exactly zero. |
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
+| Payment processor | The gateway collects rupees with its own processor, which takes cards and UPI. In the sandbox it talks to two simulated networks that accept **test numbers only**: any other card number, even a valid one, is refused, and nothing typed is ever stored or logged (an attempt keeps only the brand and last four digits, or the UPI address). Each try to pay is kept as a payment attempt with its full history, an order is charged once, and a background sweep finishes whatever a crash left half done. |
 | Hosted checkout | Every order comes with a signed link to a mobile-first page the gateway hosts, where the customer sees the merchant, the amount in rupees and the deadline, chooses UPI, card, netbanking or bank transfer, and pays (simulated in the sandbox). Customers see only "waiting for payment", "payment received", "refund started", "refunded" or "expired": compliance holds look like any received payment. The page loads nothing from other sites and cannot be framed. |
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
@@ -30,7 +31,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
 | Database backups | Every night (and at start), the database is dumped, restored into a scratch database and checked (the ledger balances, nothing is missing), then encrypted to a key you keep off the server. Old local copies are pruned; new ones can be copied off-site. A restore command recovers any backup into a new database, never over the live one. CI backs up, restores and compares on every push. |
 | Email alerts | Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (and again when the 24-hour limit passes), reconciliation differences, notifications given up on, and failed or missing backups. Someone is emailed when something new appears, reminded while problems stay open, and told once when all is clear. Emails carry no customer details and link to the console. |
-| Tests and CI | 574 .NET tests (36 of them against a real PostgreSQL in Docker), 70 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
+| Tests and CI | 689 .NET tests (42 of them against a real PostgreSQL in Docker), 70 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -288,6 +289,32 @@ It gets one more attempt and keeps its original `id`, so a merchant that did rec
 copy. It may arrive after later notifications for the same order or wallet; `sequence` says where it belongs. These and other settings are under `Gateway:Webhooks`
 (`MaxAttempts`, `BaseRetrySeconds`, `MaxRetrySeconds`, `SendTimeoutSeconds`, `LeaseSeconds`, `BatchSize`,
 `IntervalSeconds`, `Enabled`).
+
+### Payment processor
+
+The gateway collects rupees with its own payment processor. In the sandbox it uses two simulated networks, one for
+cards and one for UPI, which accept **test instruments only**: any other card number, even one that passes the
+checksum, is refused, and nothing typed is stored or logged (an attempt keeps only the brand and last four digits, or
+the UPI address). Every try to pay an order is kept as a payment attempt with its full history, and an order can have
+only one captured payment.
+
+`Gateway:Fiat:Provider` chooses who collects: `Processor` (the default) or `SandboxPartner`, the earlier simulated
+partner that reports payments by webhook (kept for its tests). The settings under `Gateway:Processor` are all checked
+at startup:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `AttemptWindowMinutes` | 10 | How long a customer has to finish one attempt; never longer than the order's own deadline |
+| `AuthenticationTries` | 3 | Tries to answer the bank's check |
+| `MaxAttemptsPerOrder` | 10 | Attempts one order may have, however they end |
+| `StuckAfterSeconds` | 120 | How long an approved payment may wait before the background sweep captures it |
+| `AuthorizationLapseHours` | 24 | After this long, an approval that cannot be captured is given up and flagged |
+| `SweepBatchSize` | 100 | The most items one sweep handles |
+
+The sweep runs with the other background work (`Gateway:Processing`). It ends attempts that ran out of time, captures
+approved payments and records captured payments on their orders. In the sandbox, `POST /v1/sandbox/orders/{id}/pay`
+pays an order through the processor with the test UPI address that is always approved. Wrong-amount and late payments
+can only be simulated with `SandboxPartner`.
 
 ### Hosted checkout page
 

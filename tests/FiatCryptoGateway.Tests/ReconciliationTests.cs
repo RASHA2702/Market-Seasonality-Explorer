@@ -239,7 +239,11 @@ public sealed class ReconciliationServiceTests
     private static ServiceProvider BuildServices(TimeProvider time)
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Settlement:CoolingOffHours"] = "0" })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gateway:Settlement:CoolingOffHours"] = "0",
+                ["Gateway:Fiat:Provider"] = "SandboxPartner", // these tests reconcile the simulated partner's report
+            })
             .Build();
         var services = new ServiceCollection();
         services.AddSingleton(time);

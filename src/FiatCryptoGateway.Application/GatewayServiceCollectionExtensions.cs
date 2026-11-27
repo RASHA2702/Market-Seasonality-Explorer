@@ -62,6 +62,21 @@ public static class GatewayServiceCollectionExtensions
             .Bind(configuration.GetSection(Settlement.SettlementOptions.SectionName))
             .ValidateOnStart();
         services.AddSingleton<Settlement.SettlementService>();
+
+        // The gateway's own payment processor. Which provider the order flow uses is chosen by Gateway:Fiat:Provider;
+        // rails register with the sandbox providers, and the guard below refuses to start if any is not a sandbox rail.
+        services.AddSingleton<IValidateOptions<Payments.FiatProviderOptions>, Payments.FiatProviderOptionsValidator>();
+        services.AddOptions<Payments.FiatProviderOptions>()
+            .Bind(configuration.GetSection(Payments.FiatProviderOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<Payments.ProcessorOptions>, Payments.ProcessorOptionsValidator>();
+        services.AddSingleton<IValidateOptions<Payments.ProcessorOptions>, Payments.PaymentRailGuard>();
+        services.AddOptions<Payments.ProcessorOptions>()
+            .Bind(configuration.GetSection(Payments.ProcessorOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<Payments.PaymentRailSet>();
+        services.AddSingleton<Payments.GatewayProcessorProvider>();
+        services.AddSingleton<Payments.PaymentProcessor>();
         services.AddSingleton<IValidateOptions<Reconciliation.ReconciliationOptions>, Reconciliation.ReconciliationOptionsValidator>();
         services.AddOptions<Reconciliation.ReconciliationOptions>()
             .Bind(configuration.GetSection(Reconciliation.ReconciliationOptions.SectionName))

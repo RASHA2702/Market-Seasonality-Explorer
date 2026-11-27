@@ -63,9 +63,32 @@ public sealed class StartupSettingsTests
     [InlineData("Gateway:Proxy:TrustedNetworks", "172.30.10.0/24, caddy")]
     [InlineData("Gateway:ApiKeys:Clients:0:DisplayName", " ")]
     [InlineData("Gateway:Settlement:Networks", "polygon,mars")]
+    [InlineData("Gateway:Fiat:Provider", "7")]                                                   // a number that is no provider
+    [InlineData("Gateway:Processor:AttemptWindowMinutes", "0")]
+    [InlineData("Gateway:Processor:AuthenticationTries", "11")]
+    [InlineData("Gateway:Processor:MaxAttemptsPerOrder", "0")]
+    [InlineData("Gateway:Processor:StuckAfterSeconds", "1")]
+    [InlineData("Gateway:Processor:AuthorizationLapseHours", "0")]
+    [InlineData("Gateway:Processor:SweepBatchSize", "0")]
     public void InvalidLimitsOrDeliverySettings_StopStartup(string key, string value)
     {
         Assert.Throws<OptionsValidationException>(() => Validate((key, value)));
+    }
+
+    [Fact]
+    public void AProviderNameThatIsNone_StopsStartup()
+    {
+        var exception = Assert.ThrowsAny<Exception>(() => Validate(("Gateway:Fiat:Provider", "Banana")));
+
+        Assert.Contains("Provider", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Processor")]
+    [InlineData("SandboxPartner")]
+    public void EitherWayOfCollectingRupees_IsAccepted(string provider)
+    {
+        Validate(("Gateway:Fiat:Provider", provider));
     }
 
     [Fact]

@@ -305,7 +305,9 @@ public sealed class SettlementServiceTests
 
     private static ServiceProvider BuildServices(TimeProvider time)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Fiat:Provider"] = "SandboxPartner" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton(time);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
@@ -389,7 +391,9 @@ public sealed class OrderSettlementTests
 
     private static ServiceProvider BuildServices(TimeProvider time, IWalletScreening? screening = null)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Fiat:Provider"] = "SandboxPartner" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton(time);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
@@ -460,7 +464,9 @@ public sealed class SettlementNotificationTests
     [Fact]
     public async Task SavingSettings_QueuesTheirNotifications()
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Fiat:Provider"] = "SandboxPartner" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(new ManualTimeProvider(T0));
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));

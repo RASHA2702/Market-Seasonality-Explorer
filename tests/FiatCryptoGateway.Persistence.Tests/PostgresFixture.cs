@@ -47,12 +47,19 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
-    /// <summary>A separate gateway instance: its own connection pool and its own sandbox providers.</summary>
-    public ServiceProvider BuildServices(TimeProvider time)
+    /// <summary>
+    /// A separate gateway instance: its own connection pool and its own sandbox providers. Most tests pay by the simulated
+    /// partner's webhook, so that is the default; processor tests ask for <c>Processor</c>.
+    /// </summary>
+    public ServiceProvider BuildServices(TimeProvider time, string fiatProvider = "SandboxPartner")
     {
         // New settlement wallets are usable at once here; the cooling-off period has its own tests.
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Settlement:CoolingOffHours"] = "0" })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gateway:Settlement:CoolingOffHours"] = "0",
+                ["Gateway:Fiat:Provider"] = fiatProvider,
+            })
             .Build();
         var services = new ServiceCollection();
         services.AddSingleton(time);

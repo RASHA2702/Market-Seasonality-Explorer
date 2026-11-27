@@ -179,6 +179,9 @@ public interface IPaymentAttemptStore
     /// <summary>Captured payments not yet recorded on their order, oldest first.</summary>
     Task<IReadOnlyList<PaymentAttempt>> ListCapturedNotRecordedAsync(int limit, CancellationToken cancellationToken);
 
+    /// <summary>Approved payments last changed at or before <paramref name="cutoff"/> whose capture did not finish, oldest first.</summary>
+    Task<IReadOnlyList<PaymentAttempt>> ListStuckAuthorizedAsync(DateTimeOffset cutoff, int limit, CancellationToken cancellationToken);
+
     /// <summary>Attempts still waiting that have passed their time limit, oldest first.</summary>
     Task<IReadOnlyList<PaymentAttempt>> ListPendingExpiredAsync(DateTimeOffset now, int limit, CancellationToken cancellationToken);
 

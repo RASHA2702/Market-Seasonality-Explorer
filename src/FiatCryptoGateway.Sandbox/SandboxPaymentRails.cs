@@ -40,6 +40,9 @@ public static class SandboxTestInstruments
 
     public const string UpiSuffix = "@sandbox";
 
+    /// <summary>The UPI address that is always approved. The sandbox shortcut that pays an order without typing details uses it.</summary>
+    public const string SuccessfulUpiAddress = "success@sandbox";
+
     public static IReadOnlyList<TestCard> Cards { get; } =
     [
         new("4111111111111111", "Visa", CardScenario.Approved, "Approved, no authentication"),
@@ -56,7 +59,7 @@ public static class SandboxTestInstruments
 
     public static IReadOnlyList<TestUpiAddress> UpiAddresses { get; } =
     [
-        new("success@sandbox", "You approve the request, and it is paid"),
+        new(SuccessfulUpiAddress, "You approve the request, and it is paid"),
         new("insufficient@sandbox", "You approve the request, and the bank declines: insufficient funds"),
         new("timeout@sandbox", "The request is never answered and times out"),
         new("invalid@sandbox", "The address does not exist"),
@@ -341,6 +344,9 @@ public sealed class InMemoryPaymentAttemptStore : IPaymentAttemptStore
 
     public Task<IReadOnlyList<PaymentAttempt>> ListCapturedNotRecordedAsync(int limit, CancellationToken cancellationToken) =>
         Task.FromResult(List(attempt => attempt.WasCaptured && attempt.RecordedOnOrderAt is null, attempt => attempt.CapturedAt ?? attempt.CreatedAt, limit));
+
+    public Task<IReadOnlyList<PaymentAttempt>> ListStuckAuthorizedAsync(DateTimeOffset cutoff, int limit, CancellationToken cancellationToken) =>
+        Task.FromResult(List(attempt => attempt.Status == PaymentAttemptStatus.Authorized && attempt.UpdatedAt <= cutoff, attempt => attempt.UpdatedAt, limit));
 
     public Task<IReadOnlyList<PaymentAttempt>> ListPendingExpiredAsync(DateTimeOffset now, int limit, CancellationToken cancellationToken) =>
         Task.FromResult(List(attempt => attempt.IsExpiredAt(now), attempt => attempt.ExpiresAt, limit));

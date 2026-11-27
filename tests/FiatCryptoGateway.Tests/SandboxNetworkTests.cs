@@ -57,7 +57,9 @@ public sealed class SandboxNetworkTests
 
     private static ServiceProvider BuildServices()
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Fiat:Provider"] = "SandboxPartner" })
+            .Build();
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(new ManualTimeProvider(Fixtures.Start));
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));

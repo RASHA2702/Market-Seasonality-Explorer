@@ -47,6 +47,14 @@ public static class OrderLockKeys
     public static Guid Settlement(string clientId) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes($"settlement\n{clientId}")).AsSpan(0, 16));
 
+    /// <summary>
+    /// One payment operation per order at a time (starting an attempt, answering the bank's check, capturing), on every
+    /// instance. It is not the order's own lock, which recording a payment takes: no code holds both at once, so the two
+    /// can never wait on each other.
+    /// </summary>
+    public static Guid Payment(Guid orderId) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes($"payment\n{orderId:N}")).AsSpan(0, 16));
+
     /// <summary>One reconciliation of a provider's day at a time, on every instance.</summary>
     public static Guid Reconciliation(string provider, DateOnly day) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes($"reconciliation\n{provider}\n{day:yyyy-MM-dd}")).AsSpan(0, 16));

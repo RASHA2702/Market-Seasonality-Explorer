@@ -1,12 +1,6 @@
-using System.Security.Cryptography;
-using System.Text;
-using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Payments;
-using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Domain.Payments;
-using FiatCryptoGateway.Domain.Settlement;
-using FiatCryptoGateway.Sandbox;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -15,7 +9,6 @@ namespace FiatCryptoGateway.Persistence.Tests;
 [Collection(SharedPostgres.Name)]
 public sealed class PostgresPaymentAttemptStoreTests(PostgresFixture fixture)
 {
-    private const string Address = "0x1111111111111111111111111111111111111111";
     private static readonly CancellationToken None = CancellationToken.None;
     private static readonly DateTimeOffset Start = new(2028, 5, 1, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(10);
@@ -270,6 +263,33 @@ public sealed class PostgresPaymentAttemptStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task OnlyApprovedPayments_NotYetCaptured_AreListedOldestFirst_ForTheSweep()
+    {
+        await using var services = fixture.BuildServices(TimeProvider.System);
+        var store = services.GetRequiredService<IPaymentAttemptStore>();
+
+        // Times far from any other test's. Other tests may leave approved attempts behind, so only this test's are compared.
+        var at = new DateTimeOffset(2032, 1, 1, 9, 0, 0, TimeSpan.Zero);
+        var older = await ApprovedAsync(store, await OrderAsync(services), at);
+        var newer = await ApprovedAsync(store, await OrderAsync(services), at.AddMinutes(5));
+        var tooRecent = await ApprovedAsync(store, await OrderAsync(services), at.AddMinutes(30));
+        var captured = await CapturedAsync(store, await OrderAsync(services));
+        var started = NewAttempt(await OrderAsync(services), at);
+        await store.AddAsync(started, None);
+        var mine = new[] { older.AttemptId, newer.AttemptId, tooRecent.AttemptId, captured.AttemptId, started.AttemptId };
+
+        async Task<List<Guid>> Stuck(DateTimeOffset cutoff) =>
+            [.. (await store.ListStuckAuthorizedAsync(cutoff, 500, None)).Select(attempt => attempt.AttemptId).Where(mine.Contains)];
+
+        Assert.Equal([older.AttemptId, newer.AttemptId], await Stuck(at.AddMinutes(10)));
+        Assert.Single(await store.ListStuckAuthorizedAsync(at.AddMinutes(10), 1, None));
+
+        // Last changed exactly at the cutoff counts as stuck, and a moment before does not.
+        Assert.Equal([older.AttemptId], await Stuck(at));
+        Assert.Empty(await Stuck(at.AddMicroseconds(-1)));
+    }
+
+    [Fact]
     public async Task TheDatabase_RefusesAnythingThatLooksLikeACardNumber_EvenIfTheCodeSlips()
     {
         await using var services = fixture.BuildServices(TimeProvider.System);
@@ -293,6 +313,16 @@ public sealed class PostgresPaymentAttemptStoreTests(PostgresFixture fixture)
 
     /// <summary>Identifiers are unique in the database for good, and tests share one, so each test makes its own.</summary>
     private static string Unique(string prefix) => $"{prefix}_{Guid.NewGuid():N}";
+
+    /// <summary>An attempt on the order that the network approved at <paramref name="at"/> and that was not captured.</summary>
+    private static async Task<PaymentAttempt> ApprovedAsync(IPaymentAttemptStore store, PaymentOrder order, DateTimeOffset at)
+    {
+        var attempt = NewAttempt(order, at);
+        await store.AddAsync(attempt, None);
+        attempt.Authorize("rail", at);
+        await store.SaveAsync(attempt, None);
+        return attempt;
+    }
 
     /// <summary>An attempt on the order that was captured and recorded on it, ready to be refunded.</summary>
     private static async Task<PaymentAttempt> CapturedAsync(IPaymentAttemptStore store, PaymentOrder order)
@@ -332,27 +362,5 @@ public sealed class PostgresPaymentAttemptStoreTests(PostgresFixture fixture)
             Window);
 
     /// <summary>A real order in the database for attempts to refer to, from its own merchant.</summary>
-    private static async Task<PaymentOrder> OrderAsync(ServiceProvider services)
-    {
-        var merchant = $"merchant-{Guid.NewGuid():N}";
-        await using (var connection = await services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync())
-        await using (var command = new NpgsqlCommand(
-            "INSERT INTO gateway.api_client (client_id, display_name, key_sha256, role) VALUES (@id, @id, @hash, 'MERCHANT')", connection))
-        {
-            command.Parameters.AddWithValue("id", merchant);
-            command.Parameters.AddWithValue("hash", Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(merchant))));
-            await command.ExecuteNonQueryAsync();
-        }
-
-        var settlement = services.GetRequiredService<SettlementService>();
-        var (wallet, _) = await settlement.RegisterAsync(merchant, "ethereum", Address, null, None);
-        if (wallet.Status == SettlementWalletStatus.UnderReview)
-        {
-            await settlement.ApproveAsync(wallet.WalletId, "officer", "Test wallet, approved for this scenario.", None);
-        }
-
-        var onRamp = services.GetRequiredService<OnRampService>();
-        var quote = await onRamp.CreateQuoteAsync(merchant, new CreateQuoteCommand("INR", 10_000m, "USDC@ethereum"), None);
-        return await onRamp.CreateOrderAsync(merchant, new CreateOrderCommand(quote.QuoteId, SandboxCustomerDirectory.Verified), None);
-    }
+    private static Task<PaymentOrder> OrderAsync(ServiceProvider services) => PostgresOrders.CreateAsync(services);
 }

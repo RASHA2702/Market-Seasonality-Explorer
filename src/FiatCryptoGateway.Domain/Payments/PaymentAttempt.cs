@@ -59,6 +59,12 @@ public static class DeclineCodes
 
     /// <summary>The order's payment deadline passed before the payment was completed.</summary>
     public const string OrderClosed = "ORDER_CLOSED";
+
+    /// <summary>
+    /// The network approved the payment but it could not be captured for so long that the approval was given up. Needs a
+    /// person to check the network's own report, since the gateway cannot be sure the customer was not charged.
+    /// </summary>
+    public const string AuthorizationLapsed = "AUTHORIZATION_LAPSED";
 }
 
 /// <summary>

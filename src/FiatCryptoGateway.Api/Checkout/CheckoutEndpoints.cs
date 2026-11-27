@@ -2,6 +2,8 @@ using FiatCryptoGateway.Api.Auth;
 using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.OnRamp;
+using FiatCryptoGateway.Application.Payments;
+using FiatCryptoGateway.Domain;
 using FiatCryptoGateway.Domain.Orders;
 using FiatCryptoGateway.Sandbox;
 using Microsoft.Extensions.Options;
@@ -84,6 +86,8 @@ public static class CheckoutEndpoints
         CheckoutService checkout,
         CheckoutLinks links,
         SandboxFiatWebhookHandler webhooks,
+        PaymentProcessor processor,
+        IOptions<FiatProviderOptions> fiat,
         TimeProvider time,
         CancellationToken cancellationToken)
     {
@@ -95,8 +99,23 @@ public static class CheckoutEndpoints
 
         if (CustomerView.Status(order, time.GetUtcNow()) == CustomerPaymentStatus.AwaitingPayment)
         {
-            var (body, signature) = webhooks.CreateSignedPaymentEvent(order);
-            await webhooks.HandleAsync(body, signature, cancellationToken);
+            if (fiat.Value.Provider == FiatProviderChoice.Processor)
+            {
+                try
+                {
+                    // The path a real payment takes, with the test UPI address that is always approved.
+                    await processor.PayWithTestUpiAsync(order.OrderId, cancellationToken);
+                }
+                catch (GatewayRuleException)
+                {
+                    // Already paid, or a payment is being completed: the page after the redirect shows where things stand.
+                }
+            }
+            else
+            {
+                var (body, signature) = webhooks.CreateSignedPaymentEvent(order);
+                await webhooks.HandleAsync(body, signature, cancellationToken);
+            }
         }
 
         CheckoutPage.ApplySecurityHeaders(http.Response);

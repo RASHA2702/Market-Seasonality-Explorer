@@ -21,7 +21,9 @@
 | Port | Sandbox implementation | Real-world counterpart |
 |---|---|---|
 | `IPriceFeed` | Fixed illustrative prices for 14 fiat currencies and 6 crypto assets | Exchange or FX rate feeds |
-| `IFiatPaymentProvider` | Fake checkout sessions, signed webhooks, refunds | Card acquirer, bank-transfer or local-rail provider |
+| `IFiatPaymentProvider` | The gateway's own processor (default), or the earlier simulated partner with signed webhooks | The processor stays ours; a partner would be a different provider behind the same port |
+| `IPaymentRail` | A simulated card network and a simulated UPI network, test instruments only | A card network or acquirer; the UPI network through a sponsor bank |
+| `IPaymentAttemptStore` | In memory | PostgreSQL |
 | `ILiquidityProvider` | Fills at the sandbox market price | Exchange or OTC desk |
 | `ICustodyProvider` | Format-checks addresses, fakes broadcasts | Custodian or self-custody wallet service |
 | `ICustomerDirectory` | Five seeded test customers | KYC/KYB vendor |
@@ -123,6 +125,44 @@ not the customer.
   fails, the claim is released so the provider's retry is not lost.
 - Liquidity, custody and refund calls must be idempotent per order ID: a retried send never sends twice.
   The sandbox enforces this and a test reprocesses completed orders to prove it.
+
+## Payment processor
+
+The gateway collects rupees itself ([own-gateway.md](own-gateway.md)). `Gateway:Fiat:Provider` chooses who:
+`Processor` (the default) or `SandboxPartner`, the earlier simulated partner that reports payments by webhook, kept
+for its tests. Only the chosen one is the order flow's provider and the source reconciliation checks.
+
+- **Attempts.** Every try by a customer to pay an order is a `PaymentAttempt` with an append-only history. Only legal
+  steps happen: Started, then maybe AwaitingAuthentication, then Authorized, Captured and perhaps Refunded; or an
+  end as Declined, AuthenticationFailed, Failed or Expired. A finished attempt never changes. An order has at most one
+  captured payment: the code checks, and a unique index in PostgreSQL refuses a second.
+- **Rails.** One `IPaymentRail` per payment method (cards, UPI), each behind the interface a real network adapter will
+  implement. The sandbox rails take test instruments only, refuse any other number even if it passes the checksum,
+  and say so without repeating what was typed. The API refuses to start if any rail is not a sandbox rail, if two
+  rails serve one method, or if there are none.
+- **What is never kept.** The processor passes what a customer typed to the rail once. An attempt keeps the brand and
+  last four digits (or the UPI address). The type, the code and the database all refuse text that looks like a card
+  number, nothing typed is logged, and a test looks for it in the logs and the records.
+- **Steps and crashes.** Each step is saved before the next outside call: the attempt is saved when the network
+  approves (before the money is taken), again when captured (before the order is told), and marked once the order
+  has it. A crash at any point leaves a state the background sweep finishes. It ends attempts past their time limit,
+  captures approved payments (a network's capture is idempotent), records captured payments on their orders (checking
+  first whether the order already has the payment), and gives up an approval that cannot be captured for
+  `AuthorizationLapseHours`, flagging it for a person. A payment captured while the exchange is down is still shown
+  to the customer as paid; the order moves on when its own worker retries.
+- **Locks.** Starting an attempt, answering the bank's check and capturing hold the order's *payment* lock, a key of
+  its own that PostgreSQL shares across instances. Recording a payment takes the order's own lock inside
+  `OnRampService`, and refunds are asked for under that lock. The processor never holds both, and the provider's
+  refund takes no payment lock, so the two can never wait on each other. A test watches every lock taken and fails on
+  any nesting, and another proves the payment lock is held while the network is asked.
+- **One live attempt per order.** Starting another ends the one still waiting. While an approved payment is being
+  completed no new attempt can start (it could take the money twice), and an order allows at most
+  `MaxAttemptsPerOrder` attempts, which slows anyone trying many cards.
+- **Books.** The provider publishes the daily settlement report from the processor's own records (payments and
+  refunds, by their identifiers), which reconciliation compares with the ledger. A payment the processor took but the
+  books do not have yet shows up as a difference until the sweep records it.
+- **Not yet.** Rails do not check currency (a real UPI rail takes rupees only), a payment the processor captured twice
+  at a real network would need a refund of the second, and an attempt stuck for long is logged but not yet emailed.
 
 ## Hosted checkout
 

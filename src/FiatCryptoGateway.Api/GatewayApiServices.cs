@@ -31,6 +31,7 @@ public static class GatewayApiServiceCollectionExtensions
         });
         services.AddOptions<ProcessingOptions>().Bind(configuration.GetSection(ProcessingOptions.SectionName));
         services.AddHostedService<OrderProcessingWorker>();
+        services.AddHostedService<PaymentProcessingWorker>();
         services.AddMerchantWebhookDelivery();
         services.AddHostedService<ReconciliationWorker>();
         services.AddSingleton<Application.Alerts.IAlertSender, Alerts.SmtpAlertSender>();

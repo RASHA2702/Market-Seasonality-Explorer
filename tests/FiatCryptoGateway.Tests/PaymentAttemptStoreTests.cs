@@ -135,6 +135,25 @@ public sealed class PaymentAttemptStoreTests
     }
 
     [Fact]
+    public async Task OnlyApprovedPayments_NotYetCaptured_AreListedOldestFirst_ForTheSweep()
+    {
+        var older = await Authorized(Start);
+        var newer = await Authorized(Start.AddMinutes(5));
+        await Authorized(Start.AddMinutes(30)); // too recent to be stuck
+        await Captured(Start);                  // finished
+        await _store.AddAsync(New(Guid.NewGuid(), Start), None); // only started, never approved
+
+        var stuck = await _store.ListStuckAuthorizedAsync(Start.AddMinutes(10), 10, None);
+
+        Assert.Equal([older.AttemptId, newer.AttemptId], stuck.Select(attempt => attempt.AttemptId));
+        Assert.Single(await _store.ListStuckAuthorizedAsync(Start.AddMinutes(10), 1, None));
+
+        // Last changed exactly at the cutoff counts as stuck, and a moment later does not.
+        Assert.Equal([older.AttemptId], (await _store.ListStuckAuthorizedAsync(Start, 10, None)).Select(attempt => attempt.AttemptId));
+        Assert.Empty(await _store.ListStuckAuthorizedAsync(Start.AddTicks(-1), 10, None));
+    }
+
+    [Fact]
     public async Task OnlyPendingAttempts_PastTheirTimeLimit_AreListedForExpiry()
     {
         var late = New(Guid.NewGuid(), Start);
@@ -181,6 +200,15 @@ public sealed class PaymentAttemptStoreTests
         PaymentAttempt.Start(
             Guid.NewGuid(), orderId, Fixtures.ClientId, new Money(10_000m, Fixtures.Inr),
             new PaymentInstrument(PaymentMethod.Upi, "success@sandbox"), at, Window);
+
+    private async Task<PaymentAttempt> Authorized(DateTimeOffset at)
+    {
+        var attempt = New(Guid.NewGuid(), at);
+        await _store.AddAsync(attempt, None);
+        attempt.Authorize("rail", at);
+        await _store.SaveAsync(attempt, None);
+        return attempt;
+    }
 
     private async Task<PaymentAttempt> Captured(DateTimeOffset capturedAt, DateTimeOffset? refundedAt = null)
     {

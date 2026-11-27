@@ -11,6 +11,7 @@ using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
 using FiatCryptoGateway.Application.OnRamp;
+using FiatCryptoGateway.Application.Payments;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Application.Settlement;
@@ -266,11 +267,27 @@ public static class GatewayEndpoints
         ClaimsPrincipal user,
         OnRampService onRamp,
         SandboxFiatWebhookHandler webhooks,
+        PaymentProcessor processor,
+        IOptions<FiatProviderOptions> fiat,
         CheckoutLinks links,
         CancellationToken cancellationToken)
     {
         var clientId = user.GetClientId();
         var order = await onRamp.GetOrderAsync(clientId, orderId, cancellationToken);
+        if (fiat.Value.Provider == FiatProviderChoice.Processor)
+        {
+            if (request?.Amount is not null || request?.LateByMinutes is not null)
+            {
+                throw new GatewayRuleException(
+                    "NOT_SUPPORTED_WITH_PROCESSOR",
+                    "The gateway's own processor always charges exactly the order's amount, when the customer pays, so a wrong-amount or late payment cannot be simulated with it.");
+            }
+
+            // The path a customer's own payment takes, with the test UPI address that is always approved.
+            await processor.PayWithTestUpiAsync(orderId, cancellationToken);
+            return Results.Ok(OrderResponse.From(await onRamp.GetOrderAsync(clientId, orderId, cancellationToken), links));
+        }
+
         var amount = request?.Amount is { } paid ? new Money(paid, order.Quote.SourceAmount.Asset) : null;
         DateTimeOffset? capturedAt = request?.LateByMinutes is { } late ? order.PaymentDeadline.AddMinutes(late) : null;
 

@@ -1,5 +1,30 @@
 # Change log
 
+## 2026-11-27 — Our own gateway, milestone 1 (part 2): the payment processor
+
+- **The gateway now collects rupees itself.** A payment processor takes what a customer typed, asks the simulated card
+  or UPI network, handles the bank's check (a one-time code, or approval in a UPI app), takes the money and tells the
+  order. `Gateway:Fiat:Provider` chooses `Processor` (the default) or `SandboxPartner`, the earlier simulated partner,
+  kept for its tests. Only the chosen one is reconciled.
+- **One live attempt per order, and one charge.** Starting a new attempt ends the one still waiting; no new attempt
+  can start while an approved payment is being completed; an order allows 10 attempts; an attempt never outlives the
+  order's own deadline. Two customers (or two gateway instances) paying one order at once are charged once.
+- **A crash or outage never loses a payment or books it twice.** Each step is saved before the next outside call. A
+  background sweep ends attempts that ran out of time, captures payments the network approved, and records captured
+  payments on their orders, checking first whether the order already has them. An approval that cannot be captured
+  for 24 hours is given up and flagged. A customer whose payment was taken while the exchange was down still sees it
+  as paid.
+- **Two locks, never held together.** The order's payment lock is held while the network is asked and let go before
+  the order is told; refunds take no payment lock. A test fails on any nesting.
+- **Refunds and the daily report.** Refunds go back through the processor, the same refund when repeated. The
+  processor's own records feed the daily report that reconciliation compares with the books; a payment the books do
+  not have yet shows as a difference until the sweep records it.
+- **Sandbox only, checked at startup.** The API refuses to start if any payment network is not a simulated one, if
+  two serve one method, or if the new `Gateway:Processor` settings are out of range.
+- The sandbox "pay" shortcuts (the merchant API and the checkout page button) now pay through the processor with the
+  test UPI address that is always approved. Wrong-amount and late payments can only be simulated with `SandboxPartner`.
+- A small migration (013) adds an index for finding approved payments that were not captured.
+
 ## 2026-11-27 — Our own gateway, milestone 1 (part 1): payment attempts and test networks
 
 - Every try to pay an order is now a **payment attempt** with its full history: started, waiting for the customer's

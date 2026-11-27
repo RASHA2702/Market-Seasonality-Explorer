@@ -1,7 +1,9 @@
 using FiatCryptoGateway.Application.OnRamp;
+using FiatCryptoGateway.Application.Payments;
 using FiatCryptoGateway.Application.Ports;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace FiatCryptoGateway.Sandbox;
 
@@ -21,8 +23,20 @@ public static class SandboxServiceCollectionExtensions
 
         services.AddSingleton<IPriceFeed, SandboxPriceFeed>();
         services.AddSingleton<SandboxFiatProvider>();
-        services.AddSingleton<IFiatPaymentProvider>(provider => provider.GetRequiredService<SandboxFiatProvider>());
-        services.AddSingleton<ISettlementReportSource>(provider => provider.GetRequiredService<SandboxFiatProvider>());
+
+        // Two ways to collect rupees, chosen by Gateway:Fiat:Provider: the gateway's own processor (the default) or the
+        // earlier simulated partner. Only the chosen one is the order flow's provider and the reconciled report source.
+        static bool UsesPartner(IServiceProvider provider) =>
+            provider.GetRequiredService<IOptions<FiatProviderOptions>>().Value.Provider == FiatProviderChoice.SandboxPartner;
+
+        services.AddSingleton<IFiatPaymentProvider>(provider =>
+            UsesPartner(provider) ? provider.GetRequiredService<SandboxFiatProvider>() : provider.GetRequiredService<GatewayProcessorProvider>());
+        services.AddSingleton<ISettlementReportSource>(provider =>
+            UsesPartner(provider) ? provider.GetRequiredService<SandboxFiatProvider>() : provider.GetRequiredService<GatewayProcessorProvider>());
+
+        // Simulated payment networks, one per payment method. Test instruments only.
+        services.AddSingleton<IPaymentRail, SandboxCardRail>();
+        services.AddSingleton<IPaymentRail, SandboxUpiRail>();
         services.AddSingleton<SandboxLiquidityProvider>();
         services.AddSingleton<ILiquidityProvider>(provider => provider.GetRequiredService<SandboxLiquidityProvider>());
         services.AddSingleton<SandboxCustodyProvider>();

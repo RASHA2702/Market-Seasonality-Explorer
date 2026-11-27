@@ -29,7 +29,11 @@ public sealed class OnRampServiceTests : IDisposable
     {
         // New settlement wallets are usable at once here; the cooling-off period has its own tests.
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Gateway:Settlement:CoolingOffHours"] = "0" })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gateway:Settlement:CoolingOffHours"] = "0",
+                ["Gateway:Fiat:Provider"] = "SandboxPartner", // these tests pay by the simulated partner's webhook
+            })
             .Build();
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(_time);
