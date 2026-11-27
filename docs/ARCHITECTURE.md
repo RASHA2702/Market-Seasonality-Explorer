@@ -11,9 +11,10 @@
    treated as low; a late or wrong payment is refunded, not converted at a stale price.
 5. **At-least-once outside, exactly-once inside.** Providers retry webhooks and clients retry requests,
    so webhook events, order creation and every provider call are idempotent.
-6. **Partners behind interfaces.** Each external party is a port in `Application/Ports`. The sandbox
-   implements them all; a real adapter (payment provider, exchange, custodian, KYC vendor) implements
-   the same interface.
+6. **Partners and networks behind interfaces.** Each external party is a port in `Application/Ports`. The
+   sandbox implements them all; a real adapter (payment network or bank, exchange, custodian, KYC vendor)
+   implements the same interface. The rupee collection is moving in-house ([own-gateway.md](own-gateway.md)):
+   the payment processor becomes ours, and only the networks under it stay behind ports.
 
 ## Components
 
@@ -137,8 +138,9 @@ not the customer.
   cached, framed (`frame-ancestors 'none'`), sniffed, indexed or sent on as a referrer. It works without JavaScript;
   the script only counts down and reloads when the status changes.
 - **Paying.** In the sandbox, the Pay button posts to the gateway, which simulates the provider's signed payment
-  event, then redirects back to the page (post, redirect, get), so a refresh or a double click pays once. With a
-  partner, this step hands over to the partner's payment page or UPI details instead.
+  event, then redirects back to the page (post, redirect, get), so a refresh or a double click pays once. The
+  planned in-house processor replaces this step with real payment details and authentication
+  ([own-gateway.md](own-gateway.md)).
 - **Return link.** Per merchant, set by the operator (HTTPS only), never taken from a request, so the page cannot be
   used to redirect customers to arbitrary sites.
 

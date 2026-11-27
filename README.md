@@ -294,8 +294,9 @@ copy. It may arrive after later notifications for the same order or wallet; `seq
 Every order's `checkoutUrl` is a link to a page the gateway hosts. The merchant sends its customer there (a redirect
 or a link); the customer sees the merchant's name, the amount in rupees (₹1,25,000.00), how long the price is held
 and the payment methods (UPI, card, netbanking, bank transfer), and pays. In the sandbox the Pay button simulates the
-payment through the same signed provider event a real payment produces; once a payment partner is connected, that
-step hands over to the partner. The page then shows the result and updates by itself.
+payment through the same signed provider event a real payment produces. You decided to build our own payment
+processor instead of connecting a partner (plan: [docs/own-gateway.md](docs/own-gateway.md)); it will replace that
+step. The page then shows the result and updates by itself.
 
 Customers see one of: waiting for payment, payment received, refund started, refunded, or expired. Review,
 rejection and freezing all look like "payment received", so nothing tips off a customer under suspicion.
@@ -563,4 +564,4 @@ for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app P
 | `src/FiatCryptoGateway.ReviewerSetup` | The command that creates a reviewer account's settings and authenticator QR code. |
 | `Dockerfile`, `docker-compose.yml`, `deploy/` | The container image, the database + API + HTTPS proxy + backup stack, the proxy's configuration (`deploy/Caddyfile`), the backup image and scripts (`deploy/backup`), and the container and backup tests. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md) and the [partner integration design](docs/partner-integration.md). |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md), the plan for [our own payment gateway](docs/own-gateway.md) and the older [partner integration design](docs/partner-integration.md). |

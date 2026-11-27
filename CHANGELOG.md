@@ -1,5 +1,13 @@
 # Change log
 
+## 2026-11-27 — Direction: build our own payment gateway
+
+- Decision recorded: instead of waiting for a payment partner (question 11), we build our own payment gateway as a
+  sample project, sandbox only, and scale it as a startup later. [docs/own-gateway.md](docs/own-gateway.md) holds the
+  plan: what it means, what we keep and change, safety rules for payment details (test cards only; card numbers never
+  stored), seven milestones, the points for your lawyer and accountant, and the assumptions to confirm.
+- The partner design is kept for later. No code changed.
+
 ## 2026-11-27 — Backups and alerts in the reviewer console
 
 - The console has a "Backups and alerts" section and two new tiles. "Open problems" counts what the alert check sees

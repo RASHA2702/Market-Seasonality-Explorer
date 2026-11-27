@@ -9,12 +9,12 @@ What has been decided for the crypto payment gateway, what is proposed, and what
 **[Lawyer]** and **[Accountant]** mark points to take to your lawyer or accountant. Nothing in this
 file is legal or tax advice.
 
-Last updated: 2026-11-26.
+Last updated: 2026-11-27.
 
 ## Still needed from you
 
-- Question 11: choose a partner from the shortlist, then create its test-environment API keys. The questions
-  to ask each candidate, and the settings you will provide, are in [partner-integration.md](partner-integration.md).
+- Own payment gateway (questions 3 and 11, decided 2026-11-27): confirm the five assumptions at the end of
+  [own-gateway.md](own-gateway.md), or tell me which to change. Nothing waits for a payment partner any more.
 - Question 6: a written AML/KYC policy.
 - Question 22: brand name and domain.
 - Question 25: renaming the repository.
@@ -49,6 +49,11 @@ customers pay on that page.
 
 ### 3. Operate as a regulated operator, or partner with licensed providers first?
 **ANSWERED**: "Yes partners." Start by partnering with licensed providers.
+- **Updated 2026-11-27:** for collecting rupees this is superseded: we build our own payment gateway as a sample
+  project (question 11, [own-gateway.md](own-gateway.md)). It stays sandbox only, so no licence is needed for the
+  sample. A real launch still needs licensed access to the real networks and the right authorisations, whoever writes
+  the software.
+- **[Lawyer]** The points listed at the end of [own-gateway.md](own-gateway.md).
 
 ### 4. Launch markets and currencies, and the payment partner and price source for each
 **ANSWERED** (part): "India for now later all over the world"; currency "INR".
@@ -111,10 +116,13 @@ can be added later.
   payment; transfers without a matching reference, or for the wrong amount, are refunded.
 
 ### 11. Payment partner, and a chargeback and fraud policy for cards
-**ANSWERED** (part): "A payment provider." Not chosen yet; you asked for a shortlist (2026-11-24).
-Which one: **OPEN**.
+**ANSWERED** (2026-11-27): "we should be independent of that and create our very own payment gateway. For now scale
+it as a sample project; we can scale it as a startup once we can complete the project." This replaces your earlier
+"a payment provider" (2026-11-24). The plan, assumptions and milestones are in [own-gateway.md](own-gateway.md)
+(**PROPOSED**); the card chargeback and fraud policy below becomes part of milestones M2 and M3.
 
-Shortlist to contact. Each claim below comes from the provider's own or a comparison website and is
+The shortlist below is kept for reference, for the day a licensed partner is wanted for real money or for the crypto
+side. Shortlist to contact. Each claim below comes from the provider's own or a comparison website and is
 **unverified**. Nothing has been signed up for.
 
 | Candidate | Why it is on the list (unverified) |

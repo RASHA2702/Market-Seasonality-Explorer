@@ -1,4 +1,8 @@
-# Partner integration design (PROPOSED)
+# Partner integration design (PROPOSED, kept for later)
+
+> **2026-11-27:** you decided to build our own payment gateway for rupee collection ([own-gateway.md](own-gateway.md)).
+> This design is kept for the day a licensed partner is wanted: for real money, or for the crypto side (liquidity,
+> custody, screening). Nothing here is being built now.
 
 How the gateway will work with a licensed partner, following the decisions in [decisions.md](decisions.md):
 partner first (question 3), never holding crypto (questions 14 and 15), the partner's price lock (question 12),
