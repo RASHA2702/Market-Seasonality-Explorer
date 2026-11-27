@@ -1,0 +1,155 @@
+using FiatCryptoGateway.Application.Payments;
+using FiatCryptoGateway.Domain.Assets;
+using FiatCryptoGateway.Domain.Payments;
+using FiatCryptoGateway.Sandbox;
+
+namespace FiatCryptoGateway.Tests;
+
+public sealed class PaymentAttemptStoreTests
+{
+    private static readonly CancellationToken None = CancellationToken.None;
+    private static readonly DateTimeOffset Start = Fixtures.Start;
+    private static readonly TimeSpan Window = TimeSpan.FromMinutes(10);
+
+    private readonly InMemoryPaymentAttemptStore _store = new();
+
+    [Fact]
+    public async Task ASavedAttempt_IsFoundAsACopy_NotTheSameObject()
+    {
+        var attempt = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(attempt, None);
+
+        var found = await _store.FindAsync(attempt.AttemptId, None);
+        found!.Authorize("rail_1", Start.AddSeconds(1)); // not saved
+
+        Assert.Equal(PaymentAttemptStatus.Started, (await _store.FindAsync(attempt.AttemptId, None))!.Status);
+        Assert.Null(await _store.FindAsync(Guid.NewGuid(), None));
+    }
+
+    [Fact]
+    public async Task EachSave_RaisesTheVersion_AndAStaleCopyCannotOverwriteANewerOne()
+    {
+        var attempt = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(attempt, None);
+        var first = (await _store.FindAsync(attempt.AttemptId, None))!;
+        var second = (await _store.FindAsync(attempt.AttemptId, None))!;
+
+        first.Authorize("rail_1", Start.AddSeconds(1));
+        await _store.SaveAsync(first, None);
+        second.Decline(DeclineCodes.DoNotHonor, Start.AddSeconds(2));
+
+        Assert.Equal(2, first.Version);
+        await Assert.ThrowsAsync<PaymentAttemptConcurrencyException>(() => _store.SaveAsync(second, None));
+        Assert.Equal(PaymentAttemptStatus.Authorized, (await _store.FindAsync(attempt.AttemptId, None))!.Status);
+    }
+
+    [Fact]
+    public async Task AnOrder_CanHaveSeveralAttempts_ButOnlyOneCaptured()
+    {
+        var orderId = Guid.NewGuid();
+        var declined = New(orderId, Start);
+        var paid = New(orderId, Start.AddMinutes(1));
+        var secondPayment = New(orderId, Start.AddMinutes(2));
+        await _store.AddAsync(declined, None);
+        await _store.AddAsync(paid, None);
+        await _store.AddAsync(secondPayment, None);
+        declined.Decline(DeclineCodes.DoNotHonor, Start.AddSeconds(30));
+        await _store.SaveAsync(declined, None);
+        paid.Authorize("rail_1", Start.AddMinutes(1));
+        paid.Capture("gp_pay_1", Start.AddMinutes(1));
+        await _store.SaveAsync(paid, None);
+        secondPayment.Authorize("rail_2", Start.AddMinutes(2));
+        secondPayment.Capture("gp_pay_2", Start.AddMinutes(2));
+
+        await Assert.ThrowsAsync<PaymentAttemptConcurrencyException>(() => _store.SaveAsync(secondPayment, None));
+
+        Assert.Equal([declined.AttemptId, paid.AttemptId, secondPayment.AttemptId], (await _store.ListForOrderAsync(orderId, None)).Select(attempt => attempt.AttemptId));
+        Assert.Equal(paid.AttemptId, (await _store.FindCapturedForOrderAsync(orderId, None))!.AttemptId);
+        Assert.Null(await _store.FindCapturedForOrderAsync(Guid.NewGuid(), None));
+    }
+
+    [Fact]
+    public async Task ARefundedAttempt_IsStillTheOrdersCapturedPayment()
+    {
+        var attempt = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(attempt, None);
+        attempt.Authorize("rail_1", Start.AddSeconds(1));
+        attempt.Capture("gp_pay_1", Start.AddSeconds(1));
+        attempt.Refund("gp_rfd_1", Start.AddHours(1));
+        await _store.SaveAsync(attempt, None);
+
+        Assert.Equal(PaymentAttemptStatus.Refunded, (await _store.FindCapturedForOrderAsync(attempt.OrderId, None))!.Status);
+    }
+
+    [Fact]
+    public async Task CapturedPayments_NotYetOnTheirOrder_AreListedOldestFirst_UntilRecorded()
+    {
+        var older = await Captured(Start);
+        var newer = await Captured(Start.AddMinutes(5));
+        var recorded = await Captured(Start.AddMinutes(1));
+        recorded.MarkRecordedOnOrder(Start.AddMinutes(2));
+        await _store.SaveAsync(recorded, None);
+        await _store.AddAsync(New(Guid.NewGuid(), Start), None); // not captured
+
+        var pending = await _store.ListCapturedNotRecordedAsync(10, None);
+
+        Assert.Equal([older.AttemptId, newer.AttemptId], pending.Select(attempt => attempt.AttemptId));
+        Assert.Single(await _store.ListCapturedNotRecordedAsync(1, None));
+    }
+
+    [Fact]
+    public async Task OnlyPendingAttempts_PastTheirTimeLimit_AreListedForExpiry()
+    {
+        var late = New(Guid.NewGuid(), Start);
+        var later = New(Guid.NewGuid(), Start.AddMinutes(1));
+        var notYet = New(Guid.NewGuid(), Start.AddMinutes(20));
+        var captured = await Captured(Start);
+        await _store.AddAsync(late, None);
+        await _store.AddAsync(later, None);
+        await _store.AddAsync(notYet, None);
+
+        var due = await _store.ListPendingExpiredAsync(Start.AddMinutes(12), 10, None);
+
+        Assert.Equal([late.AttemptId, later.AttemptId], due.Select(attempt => attempt.AttemptId));
+        Assert.DoesNotContain(captured.AttemptId, due.Select(attempt => attempt.AttemptId));
+        Assert.Single(await _store.ListPendingExpiredAsync(Start.AddMinutes(12), 1, None));
+    }
+
+    [Fact]
+    public async Task TheDailyReport_ListsWhatWasCapturedOrRefundedInTheWindow()
+    {
+        var inWindow = await Captured(Start.AddHours(1));
+        var before = await Captured(Start.AddHours(-30));
+        var refundedInWindow = await Captured(Start.AddHours(-30), refundedAt: Start.AddHours(2));
+        var refundedAfter = await Captured(Start.AddHours(-30), refundedAt: Start.AddHours(30));
+
+        var settled = await _store.ListSettledBetweenAsync(Start, Start.AddDays(1), None);
+
+        Assert.Equal(
+            new[] { inWindow.AttemptId, refundedInWindow.AttemptId }.Order(),
+            settled.Select(attempt => attempt.AttemptId).Order());
+        Assert.DoesNotContain(before.AttemptId, settled.Select(attempt => attempt.AttemptId));
+        Assert.DoesNotContain(refundedAfter.AttemptId, settled.Select(attempt => attempt.AttemptId));
+    }
+
+    private static PaymentAttempt New(Guid orderId, DateTimeOffset at) =>
+        PaymentAttempt.Start(
+            Guid.NewGuid(), orderId, Fixtures.ClientId, new Money(10_000m, Fixtures.Inr),
+            new PaymentInstrument(PaymentMethod.Upi, "success@sandbox"), at, Window);
+
+    private async Task<PaymentAttempt> Captured(DateTimeOffset capturedAt, DateTimeOffset? refundedAt = null)
+    {
+        var attempt = New(Guid.NewGuid(), capturedAt);
+        await _store.AddAsync(attempt, None);
+        attempt.Authorize("rail", capturedAt);
+        attempt.Capture($"gp_pay_{attempt.AttemptId:N}", capturedAt);
+        if (refundedAt is { } refunded)
+        {
+            attempt.MarkRecordedOnOrder(capturedAt);
+            attempt.Refund($"gp_rfd_{attempt.AttemptId:N}", refunded);
+        }
+
+        await _store.SaveAsync(attempt, None);
+        return attempt;
+    }
+}
