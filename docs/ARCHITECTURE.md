@@ -177,10 +177,17 @@ for its tests. Only the chosen one is the order flow's provider and the source r
   sites, and its one style and one script carry a per-response nonce under `default-src 'none'`. Responses are not
   cached, framed (`frame-ancestors 'none'`), sniffed, indexed or sent on as a referrer. It works without JavaScript;
   the script only counts down and reloads when the status changes.
-- **Paying.** In the sandbox, the Pay button posts to the gateway, which simulates the provider's signed payment
-  event, then redirects back to the page (post, redirect, get), so a refresh or a double click pays once. The
-  planned in-house processor replaces this step with real payment details and authentication
-  ([own-gateway.md](own-gateway.md)).
+- **Paying.** The page offers a UPI form and a card form for the payment methods the processor has a network for, and
+  posts them to the gateway; what a customer types goes to the processor once. Every form is answered with a redirect
+  back to the page (post, redirect, get), so a refresh or a double click pays once, and the only thing ever added to
+  the address is a short code from a fixed list. The page chooses its message by code (`CustomerMessages`), never from
+  text in the address bar or a form, so nothing typed can come back. Fields carry no value, the security code is
+  masked, and a form over 4 KB is refused before it is read. The bank's check is a code form or, for UPI, "approve in
+  your app"; in the sandbox, buttons stand in for the phone. With the earlier partner there is nothing to type, only the
+  sandbox button.
+- **Customer messages.** One file holds every sentence a customer can be shown about a payment that did not go through.
+  It says "nothing was charged" only where the attempt never reached the taking of money (a test pins the set), says
+  something more careful where it cannot be sure, and a test fails if a decline code is added without a message.
 - **Return link.** Per merchant, set by the operator (HTTPS only), never taken from a request, so the page cannot be
   used to redirect customers to arbitrary sites.
 

@@ -71,6 +71,30 @@ and what depends on you.
 | M6 | **Merchant onboarding and dashboard.** Business verification, API keys and settings managed in the product, not in settings files. | A new merchant is onboarded, goes through verification and takes a test payment without anyone editing configuration. |
 | M7 | **Startup readiness pack.** Security review, load test, monitoring, and the licensing and compliance checklist below turned into a plan. | A written list of what remains between the sample and a first real merchant. |
 
+### M1 result (built 2026-11-27)
+
+M1 is built and tested; M2 onward is not started. It was done in small commits, each with tests, mutation checks and a
+real run.
+
+- **Payment attempts.** Every try to pay an order is kept with an append-only history in PostgreSQL. An order has one
+  captured payment: the code and the database both refuse a second.
+- **Test instruments only.** Simulated card and UPI networks accept the published test cards and addresses; anything
+  else, even a valid-looking number, is refused and never kept. Startup refuses any rail that is not a sandbox rail.
+- **The processor.** It takes what the customer typed, asks the network, handles the bank's one-time password or the UPI
+  approval, takes the money and tells the order. A background sweep finishes what a crash or an outage left half
+  done, and no step books a payment twice.
+- **The payment provider by default.** Refunds, the daily settlement report and reconciliation all work through it. The
+  earlier simulated partner is still selectable (`Gateway:Fiat:Provider=SandboxPartner`) and keeps its tests.
+- **The hosted checkout.** It takes typed UPI and card payments, explains declines in plain words, and never puts what
+  was typed back into a page, an address or a log.
+
+Left out on purpose, and where it goes:
+
+- Netbanking and bank transfer: M5.
+- A currency check on each rail (a real UPI rail takes rupees only): when the first real rail is built.
+- An email when a payment has been stuck for long (today it is logged and the sweep keeps trying): with M2's alerts.
+- Card details on their own isolated origin, like hosted card fields: before any real card number is accepted.
+
 ## Beyond the sample: for your lawyer and accountant
 
 These are questions to take to them, not advice and not decisions. None blocks the sample project.
@@ -97,5 +121,5 @@ Tell me if any is wrong; each changes what I build next.
 3. **Cards and UPI first** (M1), because they are the most common in India and exercise the most (tokens, OTP,
    approval); netbanking and bank transfer follow in M5.
 4. **A placeholder name** for the processor (provider ID `gateway-processor`) until you choose a brand (question 22).
-5. **The existing simulated partner provider stays** for the current tests and examples until the processor replaces
-   it, then is retired.
+5. **The existing simulated partner provider stays** for the current tests and examples until you decide to retire
+   it. The processor now replaces it by default; the partner is one setting away. Tell me when to remove it.

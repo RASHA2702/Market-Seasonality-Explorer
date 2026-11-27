@@ -69,15 +69,15 @@ public sealed class ProcessorApiTests(GatewayApiFactory factory) : IClassFixture
     }
 
     [Fact]
-    public async Task TheCheckoutPageButton_PaysThroughTheProcessor_AndPaysOnce()
+    public async Task TheCheckoutPageShortcut_PaysThroughTheProcessor_AndPaysOnce()
     {
         using var host = Host("Processor");
         using var merchant = Merchant(host);
         var order = await ApiFlows.CreateOrderAsync(merchant);
         using var browser = Browser(host);
 
-        using var first = await PayOnPageAsync(browser, order);
-        using var second = await PayOnPageAsync(browser, order); // a double submission pays once
+        using var first = await PayWithShortcutAsync(browser, order);
+        using var second = await PayWithShortcutAsync(browser, order); // a double submission pays once
 
         Assert.Equal((HttpStatusCode.SeeOther, HttpStatusCode.SeeOther), (first.StatusCode, second.StatusCode));
         Assert.Contains("Payment received", await browser.GetStringAsync(order.CheckoutUrl!.AbsolutePath), StringComparison.Ordinal);
@@ -94,7 +94,7 @@ public sealed class ProcessorApiTests(GatewayApiFactory factory) : IClassFixture
         using var reviewer = await host.SignInReviewerAsync();
         var order = await ApiFlows.CreateOrderAsync(merchant, reviewer, SandboxWalletScreening.HighRiskAddress);
         using var browser = Browser(host);
-        using var paid = await PayOnPageAsync(browser, order);
+        using var paid = await PayWithShortcutAsync(browser, order);
 
         await ApiFlows.PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/reject", new { reason = "Linked to fraud." });
         await ApiFlows.PostAsync<ReviewOrderResponse>(reviewer, $"/v1/review/orders/{order.OrderId}/freeze", new { reason = "Reported.", reportReference = "STR-91" });
@@ -159,8 +159,6 @@ public sealed class ProcessorApiTests(GatewayApiFactory factory) : IClassFixture
     private static HttpClient Browser(WebApplicationFactory<Program> host) =>
         host.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
 
-    private static Task<HttpResponseMessage> PayOnPageAsync(HttpClient browser, OrderResponse order) =>
-        browser.PostAsync(
-            new Uri(order.CheckoutUrl!.AbsolutePath + "/pay", UriKind.Relative),
-            new FormUrlEncodedContent([new KeyValuePair<string, string>("method", "upi")]));
+    private static Task<HttpResponseMessage> PayWithShortcutAsync(HttpClient browser, OrderResponse order) =>
+        browser.PostAsync(new Uri(order.CheckoutUrl!.AbsolutePath + "/sandbox-pay", UriKind.Relative), new FormUrlEncodedContent([]));
 }

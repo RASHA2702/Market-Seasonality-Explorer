@@ -31,7 +31,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
         Assert.Contains("₹10,000.00", page, StringComparison.Ordinal);
         Assert.Contains("Sandbox: no real money moves.", page, StringComparison.Ordinal);
         Assert.Contains("IST", page, StringComparison.Ordinal);
-        Assert.Contains($"action=\"{order.CheckoutUrl.Segments[^1]}/pay\"", page, StringComparison.Ordinal);
+        Assert.Contains($"action=\"{order.CheckoutUrl.Segments[^1]}/sandbox-pay\"", page, StringComparison.Ordinal);
 
         using var paid = await PayAsync(browser, order);
         Assert.Equal(HttpStatusCode.SeeOther, paid.StatusCode);
@@ -237,9 +237,7 @@ public sealed partial class CheckoutPageTests(GatewayApiFactory factory) : IClas
         ApiFlows.CreateOrderAsync(merchant, reviewer, wallet);
 
     private static Task<HttpResponseMessage> PayAsync(HttpClient browser, OrderResponse order) =>
-        browser.PostAsync(
-            new Uri(order.CheckoutUrl!.AbsolutePath + "/pay", UriKind.Relative),
-            new FormUrlEncodedContent([new KeyValuePair<string, string>("method", "upi")]));
+        browser.PostAsync(new Uri(order.CheckoutUrl!.AbsolutePath + "/sandbox-pay", UriKind.Relative), new FormUrlEncodedContent([]));
 
     private static string WithoutNonce(string page) => NonceInPage().Replace(page, "nonce=\"\"");
 

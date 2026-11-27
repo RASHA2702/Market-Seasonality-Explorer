@@ -1,5 +1,23 @@
 # Change log
 
+## 2026-11-27 — Our own gateway, milestone 1 (part 3): customers pay by card or UPI on the hosted page
+
+- **Real payment forms.** The checkout page now has a UPI form and a card form (card number, expiry, security code,
+  name) instead of a single simulated button. Details go to the gateway's own processor, which asks the simulated
+  network. Netbanking and bank transfer are no longer listed, since nothing is behind them yet.
+- **The bank's check.** A card that needs a one-time password shows a code form with the tries left, and a wrong code
+  says so. A UPI payment shows "approve the request in your UPI app"; in the sandbox, two buttons stand in for the phone.
+  The page updates by itself when the payment changes.
+- **Plain words when a payment fails.** A decline, a time-out, an unreachable network and a mistyped or non-test card
+  each get a short explanation with the forms back, so the customer can try again. "Nothing was charged" is said only
+  where that is certain. The wording is in one place and a test fails if a decline code is added without a message.
+- **Nothing typed comes back.** Fields never carry a value, the security code is masked, every form is answered with a
+  redirect, and the address gets only a code from a fixed list, so a card number can never end up in a page, an address
+  or a log. A test pays with a card and looks for what was typed in every response and log line.
+- The sandbox shows the published test cards and UPI addresses (with what each does) on the page, and keeps a shortcut
+  button that pays with the always-approved test UPI address. With the earlier simulated partner the page has no forms,
+  only that button.
+
 ## 2026-11-27 — Fix: reading an order while it was being saved could fail
 
 - Reading an order, a payment attempt or a merchant's wallets took several separate queries. A read that overlapped a

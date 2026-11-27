@@ -21,7 +21,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Compliance | KYC level with per-payment, rolling 24-hour and rolling 30-day limits per customer; a country allow-list (India only by default) or block-list; sanctions match; wallet screening. Fails closed: a screening outage means human review, never approval. A reviewer queue (with a 24-hour overdue flag) and an append-only log of every decision; money from rejected orders is frozen and reported, and refunded only after an explicit release. |
 | API | API-key auth (only SHA-256 hashes are stored), idempotent order creation, signed and deduplicated webhooks, per-client data isolation. |
 | Payment processor | The gateway collects rupees with its own processor, which takes cards and UPI. In the sandbox it talks to two simulated networks that accept **test numbers only**: any other card number, even a valid one, is refused, and nothing typed is ever stored or logged (an attempt keeps only the brand and last four digits, or the UPI address). Each try to pay is kept as a payment attempt with its full history, an order is charged once, and a background sweep finishes whatever a crash left half done. |
-| Hosted checkout | Every order comes with a signed link to a mobile-first page the gateway hosts, where the customer sees the merchant, the amount in rupees and the deadline, chooses UPI, card, netbanking or bank transfer, and pays (simulated in the sandbox). Customers see only "waiting for payment", "payment received", "refund started", "refunded" or "expired": compliance holds look like any received payment. The page loads nothing from other sites and cannot be framed. |
+| Hosted checkout | Every order comes with a signed link to a mobile-first page the gateway hosts. The customer sees the merchant, the amount in rupees and the deadline, and pays by UPI or card. The details go to the gateway's own processor; the page handles the bank's check (a one-time password, or approving a UPI request) and says in plain words why a payment did not go through, with the forms back to try again. Nothing typed is ever put back into a page or an address. Customers see only "waiting for payment", "payment received", "refund started", "refunded" or "expired": compliance holds look like any received payment. The page loads nothing from other sites and cannot be framed. |
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state and send a given-up notification again. |
@@ -31,7 +31,7 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
 | Database backups | Every night (and at start), the database is dumped, restored into a scratch database and checked (the ledger balances, nothing is missing), then encrypted to a key you keep off the server. Old local copies are pruned; new ones can be copied off-site. A restore command recovers any backup into a new database, never over the live one. CI backs up, restores and compares on every push. |
 | Email alerts | Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (and again when the 24-hour limit passes), reconciliation differences, notifications given up on, and failed or missing backups. Someone is emailed when something new appears, reminded while problems stay open, and told once when all is clear. Emails carry no customer details and link to the console. |
-| Tests and CI | 689 .NET tests (42 of them against a real PostgreSQL in Docker), 70 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
+| Tests and CI | 716 .NET tests (43 of them against a real PostgreSQL in Docker), 70 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -319,11 +319,39 @@ can only be simulated with `SandboxPartner`.
 ### Hosted checkout page
 
 Every order's `checkoutUrl` is a link to a page the gateway hosts. The merchant sends its customer there (a redirect
-or a link); the customer sees the merchant's name, the amount in rupees (₹1,25,000.00), how long the price is held
-and the payment methods (UPI, card, netbanking, bank transfer), and pays. In the sandbox the Pay button simulates the
-payment through the same signed provider event a real payment produces. You decided to build our own payment
-processor instead of connecting a partner (plan: [docs/own-gateway.md](docs/own-gateway.md)); it will replace that
-step. The page then shows the result and updates by itself.
+or a link); the customer sees the merchant's name, the amount in rupees (₹1,25,000.00) and how long the price is held,
+and pays by UPI or card (netbanking and bank transfer come later). The details go to the gateway's own
+[payment processor](#payment-processor), which asks the payment network. If the bank wants a check, the page asks for
+the one-time password, or tells the customer to approve the request in their UPI app; it then shows the result and
+updates by itself. A payment that does not go through is explained in plain words with the forms back, so the customer
+can try again, and a card number or address that is not accepted is never repeated back. Nothing typed is put into a
+page, an address or a log.
+
+In the sandbox the page also lists the test instruments below and has a button that pays with the test UPI address.
+
+**Sandbox test instruments.** Only these are accepted: any other card number, even a valid one, and any other UPI
+address is refused, and nothing is kept. Use any expiry date in the future, any 3-digit security code (4 digits for
+American Express) and the one-time password `123456`.
+
+| Card | What happens |
+|---|---|
+| `4111 1111 1111 1111` (Visa) | Approved |
+| `4242 4242 4242 4242` (Visa), `5555 5555 5555 4444` (Mastercard) | Asks for the one-time password, then approved |
+| `3782 8224 6310 005` (American Express) | Approved (four-digit security code) |
+| `4000 0000 0000 3220` (Visa) | Asks for the one-time password, which is never accepted |
+| `4000 0000 0000 0002`, `4000 0000 0000 9995`, `4000 0000 0000 0069`, `4000 0000 0000 0127` | Declined: by the bank, insufficient funds, expired card, incorrect security code |
+| `4000 0000 0000 0259` | The card network is unavailable |
+
+| UPI address | What happens |
+|---|---|
+| `success@sandbox` | You approve the request, and it is paid |
+| `insufficient@sandbox` | You approve the request, and the bank declines: insufficient funds |
+| `timeout@sandbox` | The request is never answered and times out |
+| `invalid@sandbox` | The address does not exist |
+| `unavailable@sandbox` | The UPI network is unavailable |
+
+With the earlier partner (`Gateway:Fiat:Provider=SandboxPartner`) the page has no forms, only a sandbox button that
+simulates that partner's payment.
 
 Customers see one of: waiting for payment, payment received, refund started, refunded, or expired. Review,
 rejection and freezing all look like "payment received", so nothing tips off a customer under suspicion.

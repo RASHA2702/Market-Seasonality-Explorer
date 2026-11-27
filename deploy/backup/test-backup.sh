@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Checks backups end to end on a running stack (docker compose --profile gateway up -d --build --wait) whose
 # BACKUP_AGE_RECIPIENTS holds the public half of the key in BACKUP_TEST_KEY (a throwaway key file). With
-# SMOKE_MERCHANT_KEY set, it first creates a paid order through the API, so the backup holds ledger entries.
+# SMOKE_MERCHANT_KEY set, it first creates two paid orders, so the backup holds ledger entries and payment attempts:
+# one paid through the sandbox API, one paid the way a customer does on the hosted page (a typed test card and the
+# bank's one-time password), through the HTTPS proxy and the real database.
 # CI runs it after deploy/smoke-test.sh.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -23,19 +25,51 @@ if [[ -n "${SMOKE_MERCHANT_KEY:-}" ]]; then
   "${compose[@]}" cp proxy:/data/caddy/pki/authorities/local/root.crt "$work/root.crt" >/dev/null 2>&1
   api() { curl --silent --show-error --fail --cacert "$work/root.crt" -H "Authorization: Bearer $SMOKE_MERCHANT_KEY" -H 'Content-Type: application/json' "$@"; }
   api -X POST https://localhost/v1/settlement/wallets --data '{"network":"ethereum","address":"0x1111111111111111111111111111111111111111"}' >/dev/null || true
-  quote="$(api -X POST https://localhost/v1/quotes --data '{"sourceCurrency":"INR","sourceAmount":"10000.00","destinationAsset":"USDC@ethereum"}' | sed -n 's/.*"quoteId":"\([^"]*\)".*/\1/p')"
-  order="$(api -X POST https://localhost/v1/orders -H "Idempotency-Key: backup-test-$(date +%s)" --data "{\"quoteId\":\"$quote\",\"customerId\":\"cust_verified\"}" | sed -n 's/.*"orderId":"\([^"]*\)".*/\1/p')"
+  new_order() {
+    local quote
+    quote="$(api -X POST https://localhost/v1/quotes --data '{"sourceCurrency":"INR","sourceAmount":"10000.00","destinationAsset":"USDC@ethereum"}' | sed -n 's/.*"quoteId":"\([^"]*\)".*/\1/p')"
+    api -X POST https://localhost/v1/orders -H "Idempotency-Key: backup-test-$1-$(date +%s)" --data "{\"quoteId\":\"$quote\",\"customerId\":\"cust_verified\"}"
+  }
+  # Let an order finish, so nothing changes in the database between the backup and the comparison.
+  finish_order() {
+    local status=""
+    for _ in $(seq 1 60); do
+      status="$(api "https://localhost/v1/orders/$1" | python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])')"
+      [[ "$status" == Completed ]] && break
+      if [[ "$status" == CryptoSent ]]; then api -X POST "https://localhost/v1/sandbox/orders/$1/confirm" >/dev/null || true; fi
+      sleep 1
+    done
+    [[ "$status" == Completed ]] || failed "the test order $1 did not complete (it is $status)"
+  }
+
+  order="$(new_order sandbox | sed -n 's/.*"orderId":"\([^"]*\)".*/\1/p')"
   api -X POST "https://localhost/v1/sandbox/orders/$order/pay" >/dev/null
-  # Let the order finish, so nothing changes in the database between the backup and the comparison.
-  status=""
-  for _ in $(seq 1 60); do
-    status="$(api "https://localhost/v1/orders/$order" | python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])')"
-    [[ "$status" == Completed ]] && break
-    if [[ "$status" == CryptoSent ]]; then api -X POST "https://localhost/v1/sandbox/orders/$order/confirm" >/dev/null || true; fi
-    sleep 1
-  done
-  [[ "$status" == Completed ]] || failed "the test order did not complete (it is $status)"
+  finish_order "$order"
   passed "created, paid and completed order $order"
+
+  # A customer pays the second order on the hosted page: a typed test card, then the bank's one-time password.
+  page() { curl --silent --show-error --cacert "$work/root.crt" "$@"; }
+  created="$(new_order customer)"
+  order="$(sed -n 's/.*"orderId":"\([^"]*\)".*/\1/p' <<<"$created")"
+  checkout="$(sed -n 's/.*"checkoutUrl":"\([^"]*\)".*/\1/p' <<<"$created")"
+  [[ "$checkout" == https://localhost/checkout/* ]] || failed "the order's checkout link is $checkout"
+  grep -q 'name="card_number"' <<<"$(page "$checkout")" || failed "the checkout page has no card form"
+  expiry="12/$(printf '%02d' $(( ($(date +%Y) + 2) % 100 )))"
+  location="$(page --output /dev/null --write-out '%{redirect_url}' -X POST "$checkout/pay" \
+    --data-urlencode method=card --data-urlencode 'card_number=4242 4242 4242 4242' --data-urlencode "card_expiry=$expiry" --data-urlencode card_code=737)"
+  [[ "$location" == "$checkout" ]] || failed "paying by card was answered with: $location"
+  html="$(page "$checkout")"
+  grep -q 'Enter the code from your bank' <<<"$html" || failed "the checkout page did not ask for the one-time password"
+  # The page may name the card by its last four digits, and the sandbox help lists the published test numbers; nothing else.
+  shown="$(python3 -c 'import re, sys; print(re.sub(r"<details class=\"sandbox-help\">.*?</details>", "", sys.stdin.read(), flags=re.S))' <<<"$html")"
+  ! grep -qE '4242 ?4242' <<<"$shown" || failed "the page shows more of the card number than its last four digits"
+  attempt="$(sed -n 's/.*name="attempt" value="\([0-9a-f-]*\)".*/\1/p' <<<"$html" | head -n 1)"
+  [[ -n "$attempt" ]] || failed "the page has no attempt to answer"
+  location="$(page --output /dev/null --write-out '%{redirect_url}' -X POST "$checkout/authenticate" --data-urlencode "attempt=$attempt" --data-urlencode code=123456)"
+  [[ "$location" == "$checkout" ]] || failed "the one-time password was answered with: $location"
+  grep -q 'Payment received' <<<"$(page "$checkout")" || failed "the checkout page does not show the payment as received"
+  finish_order "$order"
+  passed "a customer paid order $order on the hosted page with a typed card and a one-time password, through the proxy"
 fi
 
 [[ "$(docker inspect --format '{{.State.Health.Status}}' "$("${compose[@]}" ps -q backup)")" == healthy ]] || failed "the backup container is not healthy"

@@ -3,8 +3,33 @@ using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Unicode;
 using FiatCryptoGateway.Application.OnRamp;
+using FiatCryptoGateway.Domain.Payments;
+using FiatCryptoGateway.Sandbox;
 
 namespace FiatCryptoGateway.Api.Checkout;
+
+/// <summary>Where the customer's latest payment attempt stands, in the terms the page needs.</summary>
+public enum CheckoutAttemptStep
+{
+    /// <summary>Nothing is waiting: the customer chooses how to pay.</summary>
+    None,
+
+    /// <summary>The bank wants a one-time password.</summary>
+    EnterCode,
+
+    /// <summary>A request was sent to the customer's UPI app.</summary>
+    ApproveInUpiApp,
+
+    /// <summary>The bank has approved; the money is being taken.</summary>
+    Finishing,
+
+    /// <summary>The last attempt did not succeed: the customer chooses again, and is told why.</summary>
+    Ended,
+}
+
+/// <summary>The customer's latest attempt. <c>Label</c> is the brand and last four digits, or the UPI address.</summary>
+public sealed record CheckoutAttemptModel(
+    CheckoutAttemptStep Step, Guid AttemptId, string Label, int TriesLeft, string? DeclineCode, string Status);
 
 /// <summary>What the checkout page shows. Every text here is HTML-encoded when rendered.</summary>
 public sealed record CheckoutPageModel(
@@ -16,7 +41,10 @@ public sealed record CheckoutPageModel(
     long SecondsRemaining,
     string Token,
     Uri? ReturnUrl,
-    bool Sandbox);
+    bool Sandbox,
+    IReadOnlyList<PaymentMethod> Methods,
+    CheckoutAttemptModel? Attempt = null,
+    string? Problem = null);
 
 /// <summary>
 /// Renders the hosted checkout page as one self-contained document: no third-party scripts, fonts or images, so the
@@ -76,7 +104,7 @@ public static class CheckoutPage
         var sandboxBanner = model.Sandbox ? """<p class="sandbox" role="note">Sandbox: no real money moves.</p>""" : string.Empty;
         var content = model.Status switch
         {
-            CustomerPaymentStatus.AwaitingPayment => PaymentForm(model, token),
+            CustomerPaymentStatus.AwaitingPayment => PaymentSection(model, token),
             CustomerPaymentStatus.PaymentReceived => StatusBox("ok", CheckIcon, "Payment received", $"Thank you. {merchant} has been told about your payment."),
             CustomerPaymentStatus.Expired => StatusBox(
                 "neutral", ClockIcon, "This payment link has expired", $"If you already paid, your money will be returned. Ask {merchant} for a new payment link."),
@@ -91,7 +119,7 @@ public static class CheckoutPage
             ? """<p class="note" aria-live="polite">This page updates by itself.</p>"""
             : string.Empty;
         return $"""
-            <main data-status="{model.Status}" data-status-url="{token}/status" data-seconds-left="{model.SecondsRemaining.ToString(CultureInfo.InvariantCulture)}">
+            <main data-status="{model.Status}" data-attempt="{Html.Encode(model.Attempt?.Status ?? string.Empty)}" data-status-url="{token}/status" data-seconds-left="{model.SecondsRemaining.ToString(CultureInfo.InvariantCulture)}">
               {sandboxBanner}
               <p class="eyebrow">Payment to</p>
               <h1>{merchant}</h1>
@@ -104,24 +132,134 @@ public static class CheckoutPage
             """;
     }
 
-    private static string PaymentForm(CheckoutPageModel model, string token) => $"""
-        <p class="deadline">Pay within <strong id="countdown">{Countdown(model.SecondsRemaining)}</strong>, by {Html.Encode(model.Deadline)}</p>
-        <form method="post" action="{token}/pay">
-          <fieldset>
-            <legend>How would you like to pay?</legend>
-            {Method("upi", "UPI", "Any UPI app", true)}
-            {Method("card", "Card", "Debit or credit card", false)}
-            {Method("netbanking", "Netbanking", "Your bank's website", false)}
-            {Method("bank_transfer", "Bank transfer", "IMPS, NEFT or RTGS", false)}
-          </fieldset>
-          <button type="submit" id="pay">Pay {Html.Encode(model.Amount)}</button>
-        </form>
-        {(model.Sandbox ? """<p class="note">In the sandbox this button simulates the payment. Once a payment partner is connected, you will pay on its page.</p>""" : string.Empty)}
+    private static string PaymentSection(CheckoutPageModel model, string token)
+    {
+        var attempt = model.Attempt;
+        var deadline = $"""<p class="deadline">Pay within <strong id="countdown">{Countdown(model.SecondsRemaining)}</strong>, by {Html.Encode(model.Deadline)}</p>""";
+        var ways = WaysToPay(model, token);
+        var body = attempt?.Step switch
+        {
+            CheckoutAttemptStep.EnterCode => CodeForm(model, token, attempt) + AnotherWay(ways),
+            CheckoutAttemptStep.ApproveInUpiApp => UpiRequest(model, token, attempt) + AnotherWay(ways),
+            CheckoutAttemptStep.Finishing => StatusBox("neutral", ClockIcon, "Finishing your payment", "Your bank has approved it. This takes a moment."),
+            _ => ways,
+        };
+        return deadline + Notice(model) + body + SandboxHelp(model, token);
+    }
+
+    /// <summary>Why the last try did not work, in the words of <see cref="CustomerMessages"/>. Nothing typed is ever shown back.</summary>
+    private static string Notice(CheckoutPageModel model)
+    {
+        var text = model.Problem is { } problem
+            ? CustomerMessages.ForRefusal(problem)
+            : model.Attempt is { Step: CheckoutAttemptStep.Ended } ended ? CustomerMessages.ForDecline(ended.DeclineCode) : null;
+        return text is null ? string.Empty : $"""<p class="notice" role="alert">{Html.Encode(text)}</p>""";
+    }
+
+    private static string WaysToPay(CheckoutPageModel model, string token)
+    {
+        var upi = model.Methods.Contains(PaymentMethod.Upi) ? UpiForm(model, token) : string.Empty;
+        var card = model.Methods.Contains(PaymentMethod.Card) ? CardForm(model, token) : string.Empty;
+        return upi + card;
+    }
+
+    private static string AnotherWay(string ways) =>
+        $"""<details class="other"><summary>Pay another way</summary>{ways}</details>""";
+
+    // No field ever carries a value: what was typed is never put back into a page.
+    private static string UpiForm(CheckoutPageModel model, string token) => $"""
+        <section class="option">
+          <h2>Pay with UPI</h2>
+          <form method="post" action="{token}/pay">
+            <input type="hidden" name="method" value="upi">
+            <label class="field" for="upi-address">UPI address</label>
+            <input id="upi-address" name="upi_address" type="text" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="name@bank" maxlength="80" required>
+            <button type="submit">Pay {Html.Encode(model.Amount)}</button>
+          </form>
+        </section>
         """;
 
-    private static string Method(string value, string title, string detail, bool selected) => $"""
-        <label class="method"><input type="radio" name="method" value="{value}"{(selected ? " checked" : string.Empty)}><span>{title}<small>{detail}</small></span></label>
+    private static string CardForm(CheckoutPageModel model, string token) => $"""
+        <section class="option">
+          <h2>Pay with a card</h2>
+          <form method="post" action="{token}/pay">
+            <input type="hidden" name="method" value="card">
+            <label class="field" for="card-number">Card number</label>
+            <input id="card-number" name="card_number" type="text" inputmode="numeric" autocomplete="cc-number" autocapitalize="off" spellcheck="false" placeholder="1234 1234 1234 1234" maxlength="23" required>
+            <div class="row">
+              <div>
+                <label class="field" for="card-expiry">Expiry</label>
+                <input id="card-expiry" name="card_expiry" type="text" inputmode="numeric" autocomplete="cc-exp" placeholder="MM/YY" maxlength="7" required>
+              </div>
+              <div>
+                <label class="field" for="card-code">Security code</label>
+                <input id="card-code" name="card_code" type="password" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4" required>
+              </div>
+            </div>
+            <label class="field" for="card-name">Name on card (optional)</label>
+            <input id="card-name" name="card_name" type="text" autocomplete="cc-name" maxlength="60">
+            <button type="submit">Pay {Html.Encode(model.Amount)}</button>
+          </form>
+        </section>
         """;
+
+    private static string CodeForm(CheckoutPageModel model, string token, CheckoutAttemptModel attempt)
+    {
+        var tries = attempt.TriesLeft.ToString(CultureInfo.InvariantCulture);
+        var text = $"Your bank sent a one-time password to confirm {attempt.Label}. You have {tries} {(attempt.TriesLeft == 1 ? "try" : "tries")} left.";
+        var hint = model.Sandbox ? $"""<p class="note">In the sandbox the code is <code>{SandboxTestInstruments.Otp}</code>.</p>""" : string.Empty;
+        return $"""
+            {StatusBox("neutral", ClockIcon, "Enter the code from your bank", Html.Encode(text))}
+            <form method="post" action="{token}/authenticate">
+              <input type="hidden" name="attempt" value="{attempt.AttemptId}">
+              <label class="field" for="otp">One-time password</label>
+              <input id="otp" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="10" required>
+              <button type="submit">Confirm payment</button>
+            </form>
+            {hint}
+            """;
+    }
+
+    private static string UpiRequest(CheckoutPageModel model, string token, CheckoutAttemptModel attempt)
+    {
+        var text = $"We sent a request for {model.Amount} to {attempt.Label}. Open your UPI app and approve it. This page updates by itself.";
+        var standIn = model.Sandbox
+            ? $"""
+              <form method="post" action="{token}/authenticate" class="buttons">
+                <input type="hidden" name="attempt" value="{attempt.AttemptId}">
+                <button type="submit" name="approve" value="yes">Approve (sandbox)</button>
+                <button type="submit" name="approve" value="no" class="secondary">Decline (sandbox)</button>
+              </form>
+              <p class="note">There is no phone in the sandbox, so these buttons stand in for your UPI app.</p>
+              """
+            : string.Empty;
+        return $"""
+            {StatusBox("neutral", ClockIcon, "Approve the request in your UPI app", Html.Encode(text))}
+            {standIn}
+            """;
+    }
+
+    /// <summary>The sandbox's published test instruments, and a shortcut for those who just want to see a payment succeed.</summary>
+    private static string SandboxHelp(CheckoutPageModel model, string token)
+    {
+        if (!model.Sandbox)
+        {
+            return string.Empty;
+        }
+
+        var cards = string.Concat(SandboxTestInstruments.Cards.Select(card =>
+            $"<tr><td><code>{Html.Encode(card.Display)}</code><small>{Html.Encode(card.Brand)}</small></td><td>{Html.Encode(card.Meaning)}</td></tr>"));
+        var addresses = string.Concat(SandboxTestInstruments.UpiAddresses.Select(address =>
+            $"<tr><td><code>{Html.Encode(address.Address)}</code></td><td>{Html.Encode(address.Meaning)}</td></tr>"));
+        return $"""
+            <details class="sandbox-help">
+              <summary>Sandbox: test cards and UPI addresses</summary>
+              <p class="note">Use any expiry date in the future, any 3-digit security code (4 digits for American Express) and the one-time password <code>{SandboxTestInstruments.Otp}</code>. Real cards are refused, and nothing you type is kept.</p>
+              <div class="scroll"><table><thead><tr><th>Card or address</th><th>What happens</th></tr></thead><tbody>{cards}{addresses}</tbody></table></div>
+              <form method="post" action="{token}/sandbox-pay"><button type="submit" class="secondary">Skip the form: pay with the test UPI address</button></form>
+            </details>
+            """;
+    }
 
     private static string StatusBox(string tone, string icon, string title, string text) => $"""
         <section class="status {tone}" role="status"><span aria-hidden="true">{icon}</span><div><h2>{title}</h2><p>{text}</p></div></section>
@@ -157,12 +295,23 @@ public static class CheckoutPage
         .meta { margin: 2px 0 20px; color: var(--muted); font-size: 14px; }
         .deadline { margin: 0 0 16px; font-size: 15px; }
         .deadline strong { font-variant-numeric: tabular-nums; }
-        fieldset { border: 0; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
-        legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
-        label.method { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
-        label.method:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-        label.method small { display: block; color: var(--muted); font-size: 13px; }
-        input[type=radio] { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; flex: none; }
+        .option { margin: 0 0 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+        .option h2 { margin: 0 0 12px; font-size: 16px; }
+        label.field { display: block; margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+        input[type=text], input[type=password] { display: block; width: 100%; padding: 12px 14px; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .notice { margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); font-size: 14px; font-weight: 600; }
+        details.other { margin: 16px 0 0; }
+        details > summary { cursor: pointer; font-weight: 600; }
+        details.other > summary { margin-bottom: 12px; }
+        details.sandbox-help { margin: 16px 0 0; font-size: 14px; }
+        .scroll { overflow-x: auto; margin: 0 0 12px; }
+        table { border-collapse: collapse; width: 100%; font-size: 13px; }
+        th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        td small { display: block; color: var(--muted); }
+        code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: nowrap; }
+        .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 0; }
+        button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
         button { width: 100%; padding: 14px 16px; border: 0; border-radius: 12px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; cursor: pointer; }
         button:disabled { opacity: 0.6; cursor: progress; }
         :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -181,6 +330,7 @@ public static class CheckoutPage
         (() => {
           const main = document.querySelector('main');
           const status = main.dataset.status;
+          const attempt = main.dataset.attempt || '';
           let left = Number(main.dataset.secondsLeft || 0);
           const countdown = document.getElementById('countdown');
           if (countdown) {
@@ -191,14 +341,20 @@ public static class CheckoutPage
             setInterval(async () => {
               try {
                 const response = await fetch(main.dataset.statusUrl, { cache: 'no-store', headers: { Accept: 'application/json' } });
-                if (response.ok && (await response.json()).status !== status) { location.reload(); }
+                if (response.ok) {
+                  const now = await response.json();
+                  if (now.status !== status || (now.attempt || '') !== attempt) { location.reload(); }
+                }
               } catch { /* try again on the next tick */ }
             }, 5000);
           }
-          const form = document.querySelector('form');
-          if (form) {
-            form.addEventListener('submit', () => { const button = form.querySelector('button'); button.disabled = true; button.textContent = 'Processing…'; });
-          }
+          // The button is turned off after the browser has read the form, so a button's own name and value are still sent.
+          document.querySelectorAll('form').forEach((form) => {
+            form.addEventListener('submit', () => {
+              const button = form.querySelector('button[type=submit]');
+              if (button) { setTimeout(() => { button.disabled = true; button.textContent = 'Processing…'; }, 0); }
+            });
+          });
         })();
         </script>
         </body>
