@@ -15,6 +15,15 @@ public sealed class InMemoryBackupRunStore : IBackupRunStore
         }
     }
 
+    public Task<IReadOnlyList<BackupRun>> ListRecentAsync(int limit, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<BackupRun> recent = [.. Enumerable.Reverse(_runs).Take(limit)];
+            return Task.FromResult(recent);
+        }
+    }
+
     public Task RecordAsync(BackupRun run, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -36,6 +45,15 @@ public sealed class InMemoryAlertLog : IAlertLog
         lock (_gate)
         {
             return Task.FromResult(_entries.LastOrDefault());
+        }
+    }
+
+    public Task<IReadOnlyList<AlertLogEntry>> ListRecentAsync(int limit, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<AlertLogEntry> recent = [.. Enumerable.Reverse(_entries).Take(limit)];
+            return Task.FromResult(recent);
         }
     }
 

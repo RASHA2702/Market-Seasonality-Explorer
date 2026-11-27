@@ -45,7 +45,7 @@ button:disabled { opacity: 0.6; cursor: progress; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .amount { font-size: 17px; font-weight: 700; }
 .muted { color: var(--muted); }
-.badge { padding: 2px 8px; border-radius: 999px; background: var(--chip); font-size: 12px; font-weight: 600; }
+.badge { white-space: nowrap; padding: 2px 8px; border-radius: 999px; background: var(--chip); font-size: 12px; font-weight: 600; }
 .badge.warn { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .badge.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 10px 0; font-size: 14px; }
@@ -60,7 +60,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 details { margin-top: 8px; }
 summary { cursor: pointer; color: var(--accent); font-weight: 600; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: break-word; }
 th { color: var(--muted); font-weight: 600; }
 .empty { color: var(--muted); margin: 8px 0 0; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 0 0 8px; }
@@ -68,6 +68,9 @@ th { color: var(--muted); font-weight: 600; }
 .inline-form input { width: auto; }
 .table-scroll { overflow-x: auto; }
 .who { font-weight: 600; color: var(--text); }
+ul.plain { list-style: none; margin: 8px 0 0; padding: 0; }
+ul.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+ul.plain li:last-child { border-bottom: 0; }
 .notice { margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--muted); font-size: 14px; }
 .notice.warn { border-color: var(--warn); color: var(--text); }
 .notice.warn strong { color: var(--warn); }
@@ -107,6 +110,8 @@ th { color: var(--muted); font-weight: 600; }
       <a class="tile" href="#reconciliation"><span class="count" id="count-differences">0</span><span class="label">Reconciliation differences</span><span class="hint"></span></a>
       <a class="tile" href="#failed"><span class="count" id="count-failed">0</span><span class="label">Failed notifications</span><span class="hint"></span></a>
       <div class="tile"><span class="count" id="ledger-state">–</span><span class="label">Ledger</span><span class="hint"></span></div>
+      <a class="tile" href="#system"><span class="count" id="count-open">0</span><span class="label">Open problems</span><span class="hint" id="hint-open"></span></a>
+      <a class="tile" href="#system"><span class="count" id="backup-state">–</span><span class="label">Last backup</span><span class="hint" id="hint-backup"></span></a>
     </nav>
     <p class="updated" id="updated" aria-live="polite"></p>
     <p class="error" id="console-error" role="alert" hidden></p>
@@ -145,6 +150,19 @@ th { color: var(--muted); font-weight: 600; }
       <h2>Failed notifications</h2>
       <p class="lead">Merchant notifications the gateway gave up on in the last 7 days. Sending again tries once more now; it may arrive after newer notifications, so merchants should go by its sequence number.</p>
       <div id="failed-list"></div>
+    </section>
+
+    <section class="card" id="system">
+      <h2>Backups and alerts</h2>
+      <p class="lead">What the gateway reports about itself. The open problems are what the alert check sees right now, checked each time this page refreshes, whether or not emails are on.</p>
+      <h3>Open problems</h3>
+      <div id="open-list"></div>
+      <h3>Database backups</h3>
+      <div id="backup-summary"></div>
+      <div id="backup-list"></div>
+      <h3>Alert emails</h3>
+      <div id="alert-summary"></div>
+      <div id="email-list"></div>
     </section>
   </div>
 </main>
@@ -400,10 +418,87 @@ th { color: var(--muted); font-weight: 600; }
     state.className = 'count ' + (balances.balancedPerAsset ? 'good' : 'bad');
   }
 
+  // Ages are measured against the server's clock, so a browser with the wrong time still reads right.
+  function ago(iso, now) {
+    const minutes = Math.max(0, Math.round((new Date(now) - new Date(iso)) / 60000));
+    if (minutes < 2) { return 'just now'; }
+    if (minutes < 120) { return minutes + ' minutes ago'; }
+    const hours = Math.round(minutes / 60);
+    return hours < 48 ? hours + ' hours ago' : Math.round(hours / 24) + ' days ago';
+  }
+  const size = (bytes) => (bytes === null || bytes === undefined ? '–'
+    : bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + '\u00a0KB' : (bytes / 1048576).toFixed(1) + '\u00a0MB');
+
+  function setTile(countId, hintId, text, tone, hint, attention) {
+    const count = byId(countId);
+    count.textContent = text;
+    count.className = 'count' + (tone ? ' ' + tone : '');
+    byId(hintId).textContent = hint || '';
+    count.closest('.tile').dataset.attention = attention ? 'true' : 'false';
+  }
+
+  function renderSystem(system) {
+    const { backups, alerts, checkedAt } = system;
+    const urgent = alerts.open.filter((problem) => problem.severity === 'Urgent').length;
+    setTile('count-open', 'hint-open', String(alerts.open.length), alerts.open.length ? '' : 'good', urgent ? urgent + ' urgent' : '', alerts.open.length > 0);
+
+    byId('open-list').replaceChildren(alerts.open.length
+      ? h('ul', { class: 'plain' }, alerts.open.map((problem) => h('li', null,
+        h('span', { class: 'badge' + (problem.severity === 'Urgent' ? ' warn' : ''), text: problem.severity === 'Urgent' ? 'Urgent' : 'Warning' }), ' ', problem.text)))
+      : h('p', { class: 'empty', text: 'Nothing needs attention right now.' }));
+
+    const latest = backups.latest;
+    const success = backups.latestSuccess;
+    const tiles = {
+      Ok: ['good', success && ago(success.finishedAt, checkedAt), false],
+      Failed: ['bad', 'Failed', true],
+      Stale: ['bad', 'Overdue', true],
+      WaitingForFirst: ['', 'Waiting', false],
+      NotSetUp: ['', 'Not set up', false],
+    };
+    const [tone, text, attention] = tiles[backups.state] ?? ['', backups.state, false];
+    setTile('backup-state', 'hint-backup', text, tone, backups.state === 'Failed' && success ? 'Last good one ' + ago(success.finishedAt, checkedAt) : '', attention);
+
+    const lines = [];
+    if (backups.state === 'NotSetUp') {
+      lines.push(h('p', { class: 'empty', text: 'No backups are recorded. Backups run in the container setup (README, Database backups).' }));
+    } else if (backups.state === 'WaitingForFirst') {
+      lines.push(h('p', { class: 'empty', text: 'No backup has finished yet. The first runs when the backup container starts.' }));
+    }
+    if (latest && !latest.succeeded) {
+      lines.push(h('p', { class: 'error', text: 'The latest backup attempt failed ' + ago(latest.finishedAt, checkedAt) + ' (' + when(latest.finishedAt) + '). ' + (latest.detail ?? '') }));
+    }
+    if (success) {
+      lines.push(h('p', null, 'Last successful backup: ', h('strong', { text: when(success.finishedAt) }), ' (' + ago(success.finishedAt, checkedAt) + '), '
+        + success.file + ', ' + size(success.bytes) + '. It was restored into a scratch database and checked before it was kept.'));
+    }
+    if (backups.state === 'Stale') {
+      lines.push(h('p', { class: 'error', text: 'No backup has succeeded within ' + backups.maxAgeHours + ' hours.' }));
+    }
+    byId('backup-summary').replaceChildren(...lines);
+    byId('backup-list').replaceChildren(backups.recent.length
+      ? table(['Finished', 'Result', 'File', 'Size', 'Note'], backups.recent.map((run) => [
+        when(run.finishedAt), h('span', { class: 'badge ' + (run.succeeded ? 'ok' : 'warn'), text: run.succeeded ? 'Saved' : 'Failed' }),
+        run.file ? h('code', { text: run.file }) : '–', size(run.bytes), run.detail ?? '']))
+      : '');
+
+    byId('alert-summary').replaceChildren(h('p', null, alerts.emailOn
+      ? 'Alert emails are on: sent to ' + alerts.recipients + (alerts.recipients === 1 ? ' address' : ' addresses') + ', checked every '
+        + alerts.checkIntervalMinutes + (alerts.checkIntervalMinutes === 1 ? ' minute' : ' minutes') + '. A held payment or wallet is reported '
+        + (alerts.reviewWarnAfterHours === 0 ? 'as soon as it is waiting.' : 'after ' + alerts.reviewWarnAfterHours + ' hours.')
+      : 'Alert emails are off: nobody is emailed. Set Gateway:Alerts:To and the mail server to turn them on (README, Email alerts).'));
+    byId('email-list').replaceChildren(alerts.recentEmails.length
+      ? table(['Sent', 'Kind', 'What it reported'], alerts.recentEmails.map((email) => [
+        when(email.sentAt), h('span', { class: 'badge ' + (email.kind === 'AllClear' ? 'ok' : 'warn'), text: email.kind === 'AllClear' ? 'All clear' : 'Problems' }),
+        email.kind === 'AllClear' ? 'Everything resolved' : email.summary]))
+      : h('p', { class: 'empty', text: 'No alert emails have been sent yet.' }));
+  }
+
   async function refresh() {
-    const [held, frozen, wallets, runs, failed, ledger] = await Promise.all([
+    const [held, frozen, wallets, runs, failed, ledger, system] = await Promise.all([
       api('/v1/review/queue'), api('/v1/review/frozen'), api('/v1/review/settlement-wallets'),
       api('/v1/review/reconciliation/runs?limit=60'), api('/v1/review/webhooks/failed?days=7'), api('/v1/review/ledger/balances'),
+      api('/v1/review/system'),
     ]);
     renderHeld(held);
     renderFrozen(frozen);
@@ -411,11 +506,15 @@ th { color: var(--muted); font-weight: 600; }
     renderReconciliation(runs);
     renderFailed(failed);
     renderLedger(ledger);
+    renderSystem(system);
     byId('console-error').hidden = true;
     byId('updated').textContent = 'Updated ' + when(new Date().toISOString()) + '.';
     for (const tile of document.querySelectorAll('.tile')) {
       const count = tile.querySelector('.count');
-      tile.classList.toggle('attention', Boolean(count && /^[1-9]/.test(count.textContent)));
+      const explicit = tile.dataset.attention;
+      tile.classList.toggle('attention', explicit
+        ? explicit === 'true'
+        : Boolean(count && (count.classList.contains('bad') || /^[1-9]/.test(count.textContent))));
     }
   }
 
@@ -429,7 +528,7 @@ th { color: var(--muted); font-weight: 600; }
     token = null;
     byId('who').textContent = '';
     byId('sign-in-notice').hidden = true;
-    for (const id of ['held-list', 'wallet-list', 'frozen-list', 'reconciliation-list', 'failed-list']) { byId(id).replaceChildren(); }
+    for (const id of ['held-list', 'wallet-list', 'frozen-list', 'reconciliation-list', 'failed-list', 'open-list', 'backup-summary', 'backup-list', 'alert-summary', 'email-list']) { byId(id).replaceChildren(); }
     byId('console').hidden = true;
     byId('session').hidden = true;
     byId('sign-in').hidden = false;

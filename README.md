@@ -24,13 +24,13 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Settlement wallets | Each merchant registers one wallet per network to be paid into. Every new wallet is screened: a clean one can receive payments only after a 24-hour cooling-off period, so a merchant can disable a wallet it did not add; a risky one, or one whose screening could not finish, waits for a reviewer; a sanctioned one can never be approved. Merchants see only neutral statuses. |
 | Reconciliation | Every morning (India time), each provider's settlement report for the previous day is compared with the books by the provider's own IDs. Movements missing on either side, different amounts and duplicates are recorded for a person to check; the books are never changed automatically. The day before is checked again, so a movement reported a day late clears. |
 | Merchant webhooks | Every order status change a merchant may see, and every change to its settlement wallets, is posted to its webhook URL, signed with its own secret. A notification is saved in the same transaction as the change, so it is never lost or invented; one order's notifications arrive in order; failures are retried with backoff for about 3 hours, then recorded as given up. Reviewers can see each delivery's state and send a given-up notification again. |
-| Reviewer console | One page at `/review` for the compliance officer: held payments to decide, frozen payments to release, wallets to review, reconciliation differences, notifications that failed, and whether the ledger balances. Reviewers sign in with their own username, password and a code from an authenticator app; the session lives only in the page's memory and ends after 30 minutes without activity. |
+| Reviewer console | One page at `/review` for the compliance officer: held payments to decide, frozen payments to release, wallets to review, reconciliation differences, notifications that failed, whether the ledger balances, and the state of the backups and alerts (the last backup, the problems the alert check sees now, and the alert emails sent). Reviewers sign in with their own username, password and a code from an authenticator app; the session lives only in the page's memory and ends after 30 minutes without activity. |
 | Reviewer sign-in | One account per person, with two-factor authentication (a password and a 6-digit authenticator code, each code usable once). Five failures in a row pause sign-in for 15 minutes; sign-in requests are rate-limited per address. Sessions end on sign-out, after 30 idle minutes or 12 hours, or when the account changes. Every sign-in, failure and sign-out is logged, and the console tells a reviewer about failed attempts since their last visit. A setup command creates the account's settings and shows the authenticator QR code. |
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
 | Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
 | Database backups | Every night (and at start), the database is dumped, restored into a scratch database and checked (the ledger balances, nothing is missing), then encrypted to a key you keep off the server. Old local copies are pruned; new ones can be copied off-site. A restore command recovers any backup into a new database, never over the live one. CI backs up, restores and compares on every push. |
 | Email alerts | Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (and again when the 24-hour limit passes), reconciliation differences, notifications given up on, and failed or missing backups. Someone is emailed when something new appears, reminded while problems stay open, and told once when all is clear. Emails carry no customer details and link to the console. |
-| Tests and CI | 445 .NET tests (25 of them against a real PostgreSQL in Docker), 51 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
+| Tests and CI | 458 .NET tests (25 of them against a real PostgreSQL in Docker), 51 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -152,7 +152,7 @@ are listed in `src/FiatCryptoGateway.Sandbox/SandboxCompliance.cs`.
 
 Open <http://127.0.0.1:5080/review> and sign in with your username, password and the current code from your
 authenticator app. After sign-in the page says when you last signed in and warns about failed attempts since then.
-One page shows everything waiting for a person, with a count for each:
+One page shows everything waiting for a person, and how the gateway itself is doing, with a count or a state for each:
 
 | Section | What you can do |
 |---|---|
@@ -162,6 +162,7 @@ One page shows everything waiting for a person, with a count for each:
 | Reconciliation | The latest run for each provider and day, with every difference; reconcile a finished day. |
 | Failed notifications | Merchant notifications given up on in the last 7 days, with the last error. "Send again" gives one another attempt, for example after the merchant has fixed its endpoint. |
 | Ledger | Whether the whole ledger balances. |
+| Backups and alerts | The problems the alert check sees right now (urgent first), the state of the database backups (the last successful one, and the last seven attempts with their size and any failure), and the alert emails sent lately with what each reported. The "Open problems" and "Last backup" tiles at the top turn red when something needs you. The open problems are checked each time the page refreshes, so they show even while alert emails are off. |
 
 Each payment shows its full history on request. Every decision needs a reason and is logged with the reviewer's
 username and the time, exactly as through the API, because the page works only through the reviewer API.
@@ -189,6 +190,8 @@ An email is sent when a new problem appears or one gets worse, again after 12 ho
 (`RemindAfterHours`), and once with "All clear" when everything is resolved. Emails name orders by their first eight
 characters and merchants by ID, never customers, and link to the reviewer console. With several instances, one checks
 at a time, and what was sent is recorded, so a restart does not repeat it.
+
+The reviewer console shows the same problems live, the backup history and the emails sent (README, Reviewer console).
 
 Alerts are off until you name who receives them and the mail server that sends them (any provider's SMTP settings;
 port 587 uses STARTTLS). In the container setup, put these in `gateway.env`:
@@ -514,6 +517,7 @@ storage keeps them with its own retention rules.
 | `GET /v1/review/settlement-wallets/{id}/webhooks` | Reviewers only: the merchant notifications about a wallet, with their delivery state. |
 | `POST /v1/review/settlement-wallets/{id}/approve`, `/reject`, `/disable` | Reviewer decisions on a wallet, each with a `reason`. A sanctioned wallet cannot be approved. |
 | `GET /v1/review/ledger/balances` | Reviewers only: whole-ledger balances across all merchants. |
+| `GET /v1/review/system` | Reviewers only: the state of the database backups (`Ok`, `Failed`, `Stale`, `WaitingForFirst` or `NotSetUp`, with the latest successful attempt and the last seven), the problems the alert check sees now, and the alert emails sent lately. |
 | `GET /v1/review/frozen` | Reviewers only: frozen payments, oldest first, with the reference of the report filed. |
 | `GET /v1/review/webhooks/failed?days=7` | Reviewers only: merchant notifications given up on in the last 1 to 90 days (7 by default), newest first. Merchants without a webhook URL are not listed. |
 | `POST /v1/review/webhooks/{eventId}/retry` | Reviewers only: send a given-up notification again (`DELIVERY_NOT_FAILED` if it was delivered or is still being retried). |

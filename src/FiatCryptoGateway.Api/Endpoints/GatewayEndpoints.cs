@@ -6,6 +6,7 @@ using System.Text.Json;
 using FiatCryptoGateway.Api.Auth;
 using FiatCryptoGateway.Api.Contracts;
 using FiatCryptoGateway.Application;
+using FiatCryptoGateway.Application.Alerts;
 using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
@@ -70,6 +71,7 @@ public static class GatewayEndpoints
             Review(orderId, request, ReviewActionKind.ReleaseForRefund, user, reviews, links, ct));
         review.MapGet("/orders/{orderId:guid}/webhooks", GetWebhookDeliveries);
         review.MapGet("/ledger/balances", GetLedgerBalances);
+        review.MapGet("/system", GetSystemStatus);
         review.MapGet("/settlement-wallets", ListSettlementWalletsForReview);
         review.MapGet("/settlement-wallets/{walletId:guid}", GetSettlementWalletForReview);
         review.MapGet("/settlement-wallets/{walletId:guid}/webhooks", GetWalletWebhookDeliveries);
@@ -460,6 +462,10 @@ public static class GatewayEndpoints
         DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)
             ? day
             : throw new GatewayRuleException("INVALID_DAY", "Give the day in the form yyyy-MM-dd.");
+
+    /// <summary>Backups, the problems the alert check sees now, and the alert emails sent lately.</summary>
+    private static async Task<SystemStatusResponse> GetSystemStatus(SystemStatusService status, CancellationToken cancellationToken) =>
+        SystemStatusResponse.From(await status.GetAsync(cancellationToken));
 
     private static async Task<LedgerBalancesResponse> GetLedgerBalances(ILedgerStore ledger, CancellationToken cancellationToken)
     {

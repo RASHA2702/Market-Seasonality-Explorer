@@ -235,8 +235,11 @@ check, and changed under a per-merchant lock on every instance.
   or error message cannot add markup or script.
 - **What it shows.** Held and frozen payments, wallets under review, the latest reconciliation run per provider and
   day with its differences, notifications given up on in the last 7 days (listed newest first from a partial index
-  on `dead_at`) and whether the ledger balances. `Gateway:Review:ConsoleEnabled=false` turns the page off; the
-  API is unaffected.
+  on `dead_at`), whether the ledger balances, and `GET /v1/review/system`: backups, open problems and alert emails
+  (see Alerts). `Gateway:Review:ConsoleEnabled=false` turns the page off; the API is unaffected.
+- **Layout.** Cards, and tables that keep words whole and scroll sideways inside their card on a narrow screen, so
+  the page itself never scrolls sideways. A tile is highlighted when its count is above zero, when it shows a bad
+  state, or when its renderer says so explicitly (the backup tile shows an age as text, not a count).
 
 ## Reviewer sign-in
 
@@ -301,6 +304,12 @@ The schema enforces in the database what the domain enforces in code:
   email; open problems are emailed again after `RemindAfterHours`; an empty list after problems means one "all
   clear". A failed send records nothing, so the next check tries again. The check holds a lock (the order lock, on an
   ID no order has), so instances never send the same email twice.
+- **What the console shows.** `SystemStatusService` answers the reviewer endpoint with: the backup state, derived
+  from the latest attempt and whether the check reports no recent success (`Failed` outranks `Stale`, since it says
+  why; `NotSetUp` when there is no backup container and none is watched); the problems the alert check finds right
+  now, urgent first, run live so they show even while emails are off; and the last ten emails, each with its problems
+  summarised by kind from the logged keys (for example "2 held payments, 1 failed notification"). Ages are measured
+  against the server's clock, which the response carries.
 - **What an email says.** Short order IDs, merchant IDs, counts and waiting times; no customer IDs, names, amounts or
   screening details, since email is less protected than the console. Plain text, through any SMTP server (MailKit),
   with STARTTLS or TLS; unencrypted SMTP only to a server on the same machine.

@@ -114,7 +114,7 @@ public sealed class AlertChecks(
             var since = success?.FinishedAt ?? _startedAt;
             if (now - since > TimeSpan.FromHours(settings.BackupMaxAgeHours))
             {
-                problems.Add(new("backup:stale", AlertSeverity.Urgent, success is null
+                problems.Add(new(AlertKeys.BackupStale, AlertSeverity.Urgent, success is null
                     ? $"No database backup has succeeded since the gateway started {Hours(now - since)} hours ago."
                     : $"No database backup has succeeded for {Hours(now - since)} hours."));
             }

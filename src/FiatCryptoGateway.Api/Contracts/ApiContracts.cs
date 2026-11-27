@@ -1,4 +1,5 @@
 using System.Globalization;
+using FiatCryptoGateway.Application.Alerts;
 using FiatCryptoGateway.Application.Checkout;
 using FiatCryptoGateway.Application.OnRamp;
 using FiatCryptoGateway.Application.Ports;
@@ -397,6 +398,61 @@ public sealed record LedgerEntryResponse(Guid EntryId, string Kind, Guid? OrderI
 public sealed record BalanceResponse(string Account, string Asset, string DebitMinusCredit);
 
 public sealed record LedgerBalancesResponse(bool BalancedPerAsset, IReadOnlyList<BalanceResponse> Balances);
+
+public sealed record BackupRunResponse(DateTimeOffset FinishedAt, bool Succeeded, string? File, long? Bytes, string? Detail)
+{
+    public static BackupRunResponse? From(BackupRun? run) =>
+        run is null ? null : new BackupRunResponse(run.FinishedAt, run.Succeeded, run.File, run.Bytes, run.Detail);
+}
+
+/// <summary>
+/// <c>State</c> is <c>Ok</c>, <c>Failed</c> (the latest attempt failed), <c>Stale</c> (none succeeded within
+/// <c>MaxAgeHours</c>), <c>WaitingForFirst</c> or <c>NotSetUp</c> (no backup container).
+/// </summary>
+public sealed record BackupStatusResponse(
+    string State,
+    bool Watched,
+    int MaxAgeHours,
+    BackupRunResponse? LatestSuccess,
+    BackupRunResponse? Latest,
+    IReadOnlyList<BackupRunResponse> Recent);
+
+public sealed record AlertProblemResponse(string Severity, string Text);
+
+public sealed record AlertEmailResponse(DateTimeOffset SentAt, string Kind, int Problems, string Summary);
+
+public sealed record AlertStatusResponse(
+    bool EmailOn,
+    int Recipients,
+    int CheckIntervalMinutes,
+    int ReviewWarnAfterHours,
+    IReadOnlyList<AlertProblemResponse> Open,
+    IReadOnlyList<AlertEmailResponse> RecentEmails);
+
+/// <summary>What the gateway reports about itself: backups, the problems the alert check sees now, and recent alert emails.</summary>
+public sealed record SystemStatusResponse(DateTimeOffset CheckedAt, BackupStatusResponse Backups, AlertStatusResponse Alerts)
+{
+    public static SystemStatusResponse From(SystemStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        return new SystemStatusResponse(
+            status.CheckedAt,
+            new BackupStatusResponse(
+                status.Backups.State.ToString(),
+                status.Backups.Watched,
+                status.Backups.MaxAgeHours,
+                BackupRunResponse.From(status.Backups.LatestSuccess),
+                BackupRunResponse.From(status.Backups.Latest),
+                [.. status.Backups.Recent.Select(run => BackupRunResponse.From(run)!)]),
+            new AlertStatusResponse(
+                status.Alerts.EmailOn,
+                status.Alerts.Recipients,
+                status.Alerts.CheckIntervalMinutes,
+                status.Alerts.ReviewWarnAfterHours,
+                [.. status.Alerts.Open.Select(problem => new AlertProblemResponse(problem.Severity.ToString(), problem.Text))],
+                [.. status.Alerts.RecentEmails.Select(email => new AlertEmailResponse(email.SentAt, email.Kind.ToString(), email.Problems, email.Summary))]));
+    }
+}
 
 internal static class Format
 {

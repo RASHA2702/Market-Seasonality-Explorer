@@ -42,6 +42,10 @@ public sealed partial class ReviewConsoleTests(GatewayApiFactory factory) : ICla
         Assert.Contains("autocomplete=\"one-time-code\"", page, StringComparison.Ordinal);
         Assert.DoesNotContain("Reviewer key", page, StringComparison.Ordinal);
         Assert.Contains("[hidden] { display: none !important; }", page, StringComparison.Ordinal); // signed-out controls stay hidden
+        foreach (var id in new[] { "count-open", "backup-state", "open-list", "backup-list", "email-list" })
+        {
+            Assert.Contains($"id=\"{id}\"", page, StringComparison.Ordinal); // the backups and alerts view
+        }
         Assert.DoesNotMatch("(src|href)=\"(https?:)?//", page); // nothing loaded from other sites
     }
 

@@ -275,3 +275,5 @@ green on its branch), so nothing is lost, and work can resume at any time.
 - Built (2026-11-26): email alerts for held payments and wallets nearing or past the review limit, reconciliation
   differences, failed notifications and failed backups, with reminders and an all-clear. Still **OPEN**: which
   addresses receive them, and who answers an URGENT alert at night or on holiday.
+- Built (2026-11-27): the reviewer console shows the last backup, the problems the alert check sees, and the alert
+  emails sent, so the morning check also covers whether last night's backup worked and whether anyone was emailed.

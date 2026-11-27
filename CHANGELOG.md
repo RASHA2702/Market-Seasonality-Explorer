@@ -1,5 +1,16 @@
 # Change log
 
+## 2026-11-27 — Backups and alerts in the reviewer console
+
+- The console has a "Backups and alerts" section and two new tiles. "Open problems" counts what the alert check sees
+  right now (urgent first, listed in words, checked live even while alert emails are off). "Last backup" shows how long
+  ago the last one succeeded, or turns red for a failed or overdue one, with when the last good one was.
+- The section lists the last seven backup attempts (result, file, size, the failure note), says whether alert emails
+  are on and to how many addresses, and lists the last ten alert emails with what each reported.
+- New `GET /v1/review/system` (reviewers only). Backup runs now record their size.
+- Console tables keep words and badges whole on a phone and scroll sideways inside their card instead of squeezing
+  columns; a tile showing text (such as an age) is no longer mistaken for a count.
+
 ## 2026-11-26 — Email alerts
 
 - Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (again, as URGENT,

@@ -80,6 +80,7 @@ public static class GatewayServiceCollectionExtensions
         services.AddSingleton<Alerts.AlertChecks>();
         services.AddSingleton<Alerts.IAlertSource>(provider => provider.GetRequiredService<Alerts.AlertChecks>());
         services.AddSingleton<Alerts.AlertService>();
+        services.AddSingleton<Alerts.SystemStatusService>();
         return services;
     }
 }
