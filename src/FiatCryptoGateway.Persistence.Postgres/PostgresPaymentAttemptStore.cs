@@ -1,3 +1,4 @@
+using System.Data;
 using FiatCryptoGateway.Application.Payments;
 using FiatCryptoGateway.Domain.Assets;
 using FiatCryptoGateway.Domain.Payments;
@@ -205,6 +206,9 @@ public sealed class PostgresPaymentAttemptStore(NpgsqlDataSource dataSource, Ass
         string where, string orderBy, int limit, Action<NpgsqlCommand> parameters, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // One snapshot for the whole read. An attempt and its history are saved together in one transaction; read statement by statement,
+        // a read that overlaps a save by another instance or a worker would see an attempt's row from before the save and its history from after it.
+        await using var snapshot = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
         var rows = new List<Row>();
         await using (var command = new NpgsqlCommand($"SELECT {Columns} FROM gateway.payment_attempt {where} ORDER BY {orderBy} LIMIT @limit", connection))
         {

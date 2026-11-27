@@ -1,3 +1,4 @@
+using System.Data;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Settlement;
 using FiatCryptoGateway.Domain.Compliance;
@@ -21,6 +22,9 @@ public sealed class PostgresSettlementStore(NpgsqlDataSource dataSource) : ISett
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // One snapshot for the whole read. A merchant's settings, wallets and their histories are saved together in one transaction; read statement by statement,
+        // a read that overlaps a save by another instance or a worker would see a wallet's row from before the save and its history from after it.
+        await using var snapshot = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
         int version;
         await using (var command = new NpgsqlCommand("SELECT row_version FROM gateway.merchant_settlement WHERE client_id = @client", connection))
         {
@@ -164,6 +168,9 @@ public sealed class PostgresSettlementStore(NpgsqlDataSource dataSource) : ISett
     public async Task<IReadOnlyList<SettlementWallet>> ListUnderReviewAsync(CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // One snapshot for the whole read. A wallet and its history are saved together in one transaction; read statement by statement,
+        // a read that overlaps a save by another instance or a worker would see the wallet's row from before the save and its history from after it.
+        await using var snapshot = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
         return await ReadWalletsAsync(connection, "w.status = 'UNDER_REVIEW'", _ => { }, cancellationToken);
     }
 

@@ -321,7 +321,17 @@ public sealed partial class PaymentAttempt
             RefundedAt = refundedAt,
             Version = version,
         };
-        attempt._events.AddRange(events.OrderBy(entry => entry.Sequence));
+        var history = events.OrderBy(entry => entry.Sequence).ToList();
+
+        // The status and the history are saved together, so they always agree. If they do not, what was read mixes two
+        // moments (or the record is damaged), and acting on it could be wrong: refuse it loudly.
+        if (history.Count == 0 || history[^1].To != status)
+        {
+            throw new InvalidOperationException(
+                $"Payment attempt {attemptId} has status {status} but its history ends at {(history.Count == 0 ? "nothing" : history[^1].To)}.");
+        }
+
+        attempt._events.AddRange(history);
         return attempt;
     }
 

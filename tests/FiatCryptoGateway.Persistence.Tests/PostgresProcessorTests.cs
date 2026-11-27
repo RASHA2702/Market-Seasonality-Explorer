@@ -87,6 +87,40 @@ public sealed class PostgresProcessorTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task AnOrderAndItsAttempts_ReadWhileTheyAreBeingSaved_AreNeverHalfOldAndHalfNew()
+    {
+        // One gateway instance pays orders while another reads them without a lock, as a merchant polling its order or a
+        // customer's page does. A read must never mix an order's row from before a save with its history from after it.
+        await using var writer = fixture.BuildServices(TimeProvider.System, Processor);
+        await using var reader = fixture.BuildServices(TimeProvider.System, Processor);
+        var orders = reader.GetRequiredService<IOrderStore>();
+        var attempts = reader.GetRequiredService<IPaymentAttemptStore>();
+        var processor = writer.GetRequiredService<PaymentProcessor>();
+        var reads = 0;
+
+        for (var round = 0; round < 20; round++)
+        {
+            var order = await PostgresOrders.CreateAsync(writer);
+            using var done = new CancellationTokenSource();
+            var readers = Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
+            {
+                while (!done.IsCancellationRequested)
+                {
+                    await orders.FindAsync(order.OrderId, None); // throws if the row and the history disagree
+                    await attempts.ListForOrderAsync(order.OrderId, None);
+                    Interlocked.Increment(ref reads);
+                }
+            })).ToList();
+
+            await processor.PayWithTestUpiAsync(order.OrderId, None); // the attempt moves through its steps, then the order moves on in several saves
+            await done.CancelAsync();
+            await Task.WhenAll(readers);
+        }
+
+        Assert.True(reads > 20, "The readers hardly ran, so this proved nothing.");
+    }
+
+    [Fact]
     public async Task RejectedMoney_IsRefundedThroughTheProcessor_AfterTheReview()
     {
         await using var services = fixture.BuildServices(TimeProvider.System, Processor);

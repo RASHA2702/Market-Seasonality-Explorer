@@ -1,5 +1,17 @@
 # Change log
 
+## 2026-11-27 — Fix: reading an order while it was being saved could fail
+
+- Reading an order, a payment attempt or a merchant's wallets took several separate queries. A read that overlapped a
+  save by another gateway instance (or a background worker) could see an order's row from before the save and its
+  history from after it, and fail with "has status X but its history ends at Y". A merchant polling its order, or a
+  customer's checkout page, could have hit this while an order was being processed. Each such read is now one
+  consistent snapshot.
+- A payment attempt now refuses to load if its status and its history disagree, as an order already did.
+- Found by a test that failed once in many runs (two gateway instances paying one order). A new test reads orders and
+  attempts from a second instance while payments are saved: with the old behaviour it fails every time, with the fix it
+  passes.
+
 ## 2026-11-27 — Our own gateway, milestone 1 (part 2): the payment processor
 
 - **The gateway now collects rupees itself.** A payment processor takes what a customer typed, asks the simulated card

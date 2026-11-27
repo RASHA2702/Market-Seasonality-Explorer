@@ -1,3 +1,4 @@
+using System.Data;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Application.Webhooks;
@@ -145,6 +146,9 @@ public sealed class PostgresOrderStore(NpgsqlDataSource dataSource, AssetCatalog
     public async Task<PaymentOrder?> FindAsync(Guid orderId, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // One snapshot for the whole read. An order, its quote and its histories are saved together in one transaction; read statement by statement,
+        // a read that overlaps a save by another instance or a worker would see the order's row from before the save and its history from after it.
+        await using var snapshot = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
 
         Guid quoteId;
         string clientId, customerId, destination, status;
