@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-11-28 — Customer wording: "nothing was charged" only where we know it
+
+- **The checkout page no longer claims more than we know.** "Nothing was charged" is now said only when the customer said
+  no to the request, or the bank could not confirm it was them: in both cases no money was ever asked for. When the
+  payment network could not be reached, the request timed out, or an approval was given up, the page says "we could not
+  confirm a charge. If you were debited, it will be reversed by your bank" (and, for an approval given up, to contact the
+  merchant if it has not been returned). Before, an unreachable network and a time-out also said nothing was charged,
+  which we cannot know: the network may have acted without our hearing.
+- A test pins both sets of messages, and a new test pays through an unreachable network and checks the page. Code
+  comments that said the customer "was not charged" after a network failure were corrected.
+- This is the customer wording you asked for on 2026-11-28. The lawyer still reviews all customer-facing wording
+  (compliance backlog, item C9).
+
 ## 2026-11-27 — Our own gateway, milestone 1 (part 3): customers pay by card or UPI on the hosted page
 
 - **Real payment forms.** The checkout page now has a UPI form and a card form (card number, expiry, security code,

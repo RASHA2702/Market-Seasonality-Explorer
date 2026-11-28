@@ -297,7 +297,7 @@ public sealed partial class PaymentProcessor(
                 attempt.Decline(response.Code ?? DeclineCodes.DoNotHonor, now);
                 break;
             default:
-                // A failed network, or an answer that makes no sense at this step. The customer was not charged.
+                // A failed network, or an answer that makes no sense at this step. We cannot be sure the customer was not charged.
                 attempt.Fail(response.Code ?? DeclineCodes.RailUnavailable, now);
                 break;
         }

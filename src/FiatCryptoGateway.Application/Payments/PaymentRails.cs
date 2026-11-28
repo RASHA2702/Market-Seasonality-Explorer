@@ -72,7 +72,7 @@ public enum RailOutcome
     /// <summary>The customer's answer was wrong; they may try again.</summary>
     AuthenticationRejected,
 
-    /// <summary>The network failed or could not be reached. The customer was not charged.</summary>
+    /// <summary>The network failed or could not be reached. We cannot be sure the customer was not charged.</summary>
     Failed,
 }
 

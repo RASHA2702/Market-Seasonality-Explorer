@@ -4,13 +4,23 @@ namespace FiatCryptoGateway.Api.Checkout;
 
 /// <summary>
 /// What the checkout page tells a customer when a payment does not go through. One place for the wording, so it is easy
-/// to review: every message is short, says what to do next, says "not charged" only where that is certain, and never
-/// repeats anything the customer typed. Codes are stable; the page only ever picks a message by code, so nothing from
-/// the address bar or a form is shown back to the customer.
+/// to review: every message is short, says what to do next, and never repeats anything the customer typed. Codes are
+/// stable; the page only ever picks a message by code, so nothing from the address bar or a form is shown back to the
+/// customer.
+/// <para>
+/// A message says "nothing was charged" only where we know it is true: the customer said no, or the bank could not
+/// confirm it was them, so no money was ever asked for. Wherever the network may have acted without our hearing (it
+/// could not be reached, the request timed out, an approval was given up) the message says instead that we could not
+/// confirm a charge and that a debit will be reversed by the bank (<see cref="CannotConfirmACharge"/>). A test pins both
+/// sets, so a new message cannot claim more than we know.
+/// </para>
 /// </summary>
 public static class CustomerMessages
 {
     private const string Fallback = "That did not work. Check the details and try again.";
+
+    /// <summary>The wording for every case where we cannot be sure whether the customer was charged. It follows "so ".</summary>
+    public const string CannotConfirmACharge = "we could not confirm a charge. If you were debited, it will be reversed by your bank.";
 
     private static readonly Dictionary<string, string> Declines = new(StringComparer.Ordinal)
     {
@@ -21,11 +31,11 @@ public static class CustomerMessages
         [DeclineCodes.InvalidUpiAddress] = "That UPI address could not be found. Check it and try again.",
         [DeclineCodes.CustomerDeclined] = "You declined the request, so nothing was charged. You can try again.",
         [DeclineCodes.AuthenticationFailed] = "Your bank could not confirm it was you, so nothing was charged. Try again or use a different way to pay.",
-        [DeclineCodes.RailUnavailable] = "We could not reach the payment network, so nothing was charged. Try again in a moment.",
-        [DeclineCodes.TimedOut] = "The request timed out, so nothing was charged. Try again.",
+        [DeclineCodes.RailUnavailable] = $"We could not reach the payment network, so {CannotConfirmACharge} Try again in a moment.",
+        [DeclineCodes.TimedOut] = $"The request timed out, so {CannotConfirmACharge} Try again.",
         [DeclineCodes.Superseded] = "A newer payment attempt replaced this one.",
         [DeclineCodes.OrderClosed] = "This payment can no longer be made. Ask the merchant for a new payment link.",
-        [DeclineCodes.AuthorizationLapsed] = "We could not complete this payment. Check your account, and contact the merchant if money was taken.",
+        [DeclineCodes.AuthorizationLapsed] = $"We could not complete this payment, so {CannotConfirmACharge} Contact the merchant if it has not been returned.",
     };
 
     private static readonly Dictionary<string, string> Refusals = new(StringComparer.Ordinal)

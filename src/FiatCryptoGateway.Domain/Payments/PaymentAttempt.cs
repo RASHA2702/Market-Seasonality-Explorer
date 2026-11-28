@@ -19,7 +19,10 @@ public enum PaymentAttemptStatus
     AuthenticationFailed,
     Expired,
 
-    /// <summary>The network could not be reached or failed. The customer was not charged.</summary>
+    /// <summary>
+    /// The network could not be reached or failed. We cannot be sure the customer was not charged, so the customer is told
+    /// only that no charge could be confirmed.
+    /// </summary>
     Failed,
 
     Refunded,
@@ -241,7 +244,7 @@ public sealed partial class PaymentAttempt
         DeclineCode = code;
     }
 
-    /// <summary>The network could not be reached or failed. The customer was not charged.</summary>
+    /// <summary>The network could not be reached or failed. We cannot be sure the customer was not charged.</summary>
     public void Fail(string code, DateTimeOffset now)
     {
         MoveTo(PaymentAttemptStatus.Failed, Code(code), now);

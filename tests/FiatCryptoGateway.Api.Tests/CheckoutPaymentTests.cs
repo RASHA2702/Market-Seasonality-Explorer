@@ -243,7 +243,7 @@ public sealed partial class CheckoutPaymentTests(GatewayApiFactory factory) : IC
     [Theory]
     [InlineData("insufficient@sandbox", "yes", "There was not enough money available")]
     [InlineData("success@sandbox", "no", "You declined the request, so nothing was charged")]
-    [InlineData("timeout@sandbox", "yes", "The request timed out, so nothing was charged")]
+    [InlineData("timeout@sandbox", "yes", "The request timed out, so we could not confirm a charge")]
     public async Task UpiPayments_ThatEndBadly_SayWhy(string address, string answer, string words)
     {
         using var host = Host();
@@ -262,7 +262,7 @@ public sealed partial class CheckoutPaymentTests(GatewayApiFactory factory) : IC
 
     [Theory]
     [InlineData("invalid@sandbox", "That UPI address could not be found")]
-    [InlineData("unavailable@sandbox", "We could not reach the payment network, so nothing was charged")]
+    [InlineData("unavailable@sandbox", "We could not reach the payment network, so we could not confirm a charge")]
     public async Task UpiAddresses_ThatFailAtOnce_SayWhy(string address, string words)
     {
         using var host = Host();
@@ -306,7 +306,8 @@ public sealed partial class CheckoutPaymentTests(GatewayApiFactory factory) : IC
         var page = await browser.GetStringAsync(Path(order));
         var status = await browser.GetFromJsonAsync<CheckoutStatusResponse>(new Uri(Path(order) + "/status", UriKind.Relative));
 
-        Assert.Contains("The request timed out, so nothing was charged", page, StringComparison.Ordinal);
+        Assert.Contains("The request timed out, so " + CustomerMessages.CannotConfirmACharge, page, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing was charged", page, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Pay with a card", page, StringComparison.Ordinal);
         Assert.DoesNotContain("Approve the request in your UPI app", page, StringComparison.Ordinal);
         Assert.Equal("Expired", status!.Attempt);
@@ -391,13 +392,41 @@ public sealed partial class CheckoutPaymentTests(GatewayApiFactory factory) : IC
         Assert.All(refusals, code => Assert.Contains(code, CustomerMessages.RefusalCodesWithMessages));
         Assert.All(codes.Select(CustomerMessages.ForDecline).Concat(refusals.Select(CustomerMessages.ForRefusal)), text => Assert.False(string.IsNullOrWhiteSpace(text)));
 
-        // "Nothing was charged" is said only where the attempt never reached the point of taking money.
-        var claimsNoCharge = codes.Where(code => CustomerMessages.ForDecline(code).Contains("nothing was charged", StringComparison.Ordinal));
+        // "Nothing was charged" is said only where we know it is true: the customer said no, or the bank could not confirm it was them,
+        // so no money was ever asked for. Nowhere else.
+        var claimsNoCharge = codes.Where(code => CustomerMessages.ForDecline(code).Contains("nothing was charged", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(
-            new[] { DeclineCodes.CustomerDeclined, DeclineCodes.AuthenticationFailed, DeclineCodes.RailUnavailable, DeclineCodes.TimedOut }.Order(),
+            new[] { DeclineCodes.CustomerDeclined, DeclineCodes.AuthenticationFailed }.Order(),
             claimsNoCharge.Order());
-        Assert.DoesNotContain("charged", CustomerMessages.ForDecline("SOMETHING_NEW"), StringComparison.Ordinal);
-        Assert.DoesNotContain("charged", CustomerMessages.ForDecline(DeclineCodes.AuthorizationLapsed), StringComparison.Ordinal);
+
+        // Where the network may have acted without our hearing (unreachable, timed out, an approval given up), the customer is told
+        // that no charge could be confirmed, and that a debit will be reversed by the bank.
+        var cannotBeSure = new[] { DeclineCodes.RailUnavailable, DeclineCodes.TimedOut, DeclineCodes.AuthorizationLapsed };
+        Assert.All(cannotBeSure, code =>
+        {
+            var text = CustomerMessages.ForDecline(code);
+            Assert.Contains("we could not confirm a charge. If you were debited, it will be reversed by your bank.", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("nothing was charged", text, StringComparison.OrdinalIgnoreCase);
+        });
+
+        // Every other message, and one for a code nobody has met yet, says nothing about charges at all.
+        var silent = codes.Except(claimsNoCharge).Except(cannotBeSure).Select(CustomerMessages.ForDecline).Append(CustomerMessages.ForDecline("SOMETHING_NEW"));
+        Assert.All(silent, text => Assert.DoesNotContain("charge", text, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WhenTheNetworkCannotBeReached_TheCustomerIsNeverToldNothingWasCharged()
+    {
+        using var host = Host();
+        using var merchant = Merchant(host);
+        var order = await ApiFlows.CreateOrderAsync(merchant);
+        using var browser = Browser(host);
+
+        using var response = await PostFormAsync(browser, order, "pay", new() { ["method"] = "upi", ["upi_address"] = "unavailable@sandbox" });
+        var page = await browser.GetStringAsync(Path(order));
+
+        Assert.Contains("we could not confirm a charge. If you were debited, it will be reversed by your bank.", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing was charged", page, StringComparison.OrdinalIgnoreCase);
     }
 
     private WebApplicationFactory<Program> Host(string provider = "Processor", ManualTimeProvider? clock = null, CapturingLogs? logs = null) =>

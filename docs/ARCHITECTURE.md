@@ -186,8 +186,10 @@ for its tests. Only the chosen one is the order flow's provider and the source r
   your app"; in the sandbox, buttons stand in for the phone. With the earlier partner there is nothing to type, only the
   sandbox button.
 - **Customer messages.** One file holds every sentence a customer can be shown about a payment that did not go through.
-  It says "nothing was charged" only where the attempt never reached the taking of money (a test pins the set), says
-  something more careful where it cannot be sure, and a test fails if a decline code is added without a message.
+  It says "nothing was charged" only where we know it is true: the customer said no, or the bank could not confirm it
+  was them. Where the network may have acted without our hearing (it could not be reached, the request timed out, an
+  approval was given up) it says "we could not confirm a charge; if you were debited, it will be reversed by your bank".
+  A test pins both sets, and a test fails if a decline code is added without a message.
 - **Return link.** Per merchant, set by the operator (HTTPS only), never taken from a request, so the page cannot be
   used to redirect customers to arbitrary sites.
 
