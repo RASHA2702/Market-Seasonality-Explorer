@@ -13,7 +13,8 @@ public static class AlertKeys
     [
         ("held", "held payment", "held payments"),
         ("wallet", "wallet waiting for review", "wallets waiting for review"),
-        ("reconciliation", "reconciliation day with differences", "reconciliation days with differences"),
+        ("payment", "stuck payment", "stuck payments"),
+        ("reconciliation","reconciliation day with differences", "reconciliation days with differences"),
         ("webhook", "failed notification", "failed notifications"),
         ("backup", "backup problem", "backup problems"),
     ];

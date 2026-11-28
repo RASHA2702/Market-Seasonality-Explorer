@@ -348,6 +348,12 @@ public sealed class InMemoryPaymentAttemptStore : IPaymentAttemptStore
     public Task<IReadOnlyList<PaymentAttempt>> ListStuckAuthorizedAsync(DateTimeOffset cutoff, int limit, CancellationToken cancellationToken) =>
         Task.FromResult(List(attempt => attempt.Status == PaymentAttemptStatus.Authorized && attempt.UpdatedAt <= cutoff, attempt => attempt.UpdatedAt, limit));
 
+    public Task<IReadOnlyList<PaymentAttempt>> ListLapsedAsync(DateTimeOffset since, int limit, CancellationToken cancellationToken) =>
+        Task.FromResult(List(
+            attempt => attempt.Status == PaymentAttemptStatus.Failed && attempt.DeclineCode == DeclineCodes.AuthorizationLapsed && attempt.UpdatedAt >= since,
+            attempt => attempt.UpdatedAt,
+            limit));
+
     public Task<IReadOnlyList<PaymentAttempt>> ListPendingExpiredAsync(DateTimeOffset now, int limit, CancellationToken cancellationToken) =>
         Task.FromResult(List(attempt => attempt.IsExpiredAt(now), attempt => attempt.ExpiresAt, limit));
 

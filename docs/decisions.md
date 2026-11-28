@@ -361,5 +361,8 @@ Still **OPEN**: the people, and who covers reviews and refunds around the clock.
 - Built (2026-11-26): email alerts for held payments and wallets nearing or past the review limit, reconciliation
   differences, failed notifications and failed backups, with reminders and an all-clear. Still **OPEN**: which
   addresses receive them, and who answers an URGENT alert at night or on holiday.
+- Built (2026-11-28): the alert check also emails, as URGENT, a payment stuck between the payment network and its order
+  (approved but not captured, or captured but not recorded, for 30 minutes) and an approval the gateway gave up on
+  (the customer may be debited, so someone checks the network's own report). The times are settings.
 - Built (2026-11-27): the reviewer console shows the last backup, the problems the alert check sees, and the alert
   emails sent, so the morning check also covers whether last night's backup worked and whether anyone was emailed.

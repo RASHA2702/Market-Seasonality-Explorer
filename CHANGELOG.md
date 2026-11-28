@@ -1,5 +1,25 @@
 # Change log
 
+## 2026-11-28 — An email when a payment is stuck
+
+- **The alert check now watches the payment processor.** Three situations are emailed as URGENT, and shown in the
+  reviewer console's open problems: a payment the network approved but the gateway could not capture, and a payment
+  that was captured but whose order has not recorded it, each after 30 minutes
+  (`Gateway__Alerts__StuckPaymentAfterMinutes`, 5 to 1440); and an approval the gateway gave up on after 24 hours,
+  which may have left the customer debited, so someone checks the payment network's own report (reported for 7 days,
+  `Gateway__Alerts__LapsedApprovalReportDays`, 1 to 90). Before, these were only written to the log.
+- The gateway's own sweep keeps trying meanwhile, so an email means the sweep cannot finish (the network or the
+  database is down). The text names the order by its first eight characters and the merchant, never the customer. The
+  "all clear" email now mentions stuck payments, and the console's email history counts them.
+- A small migration (014) adds an index for the look-up of given-up approvals, which runs with every check; the query
+  planner was checked to use it.
+- Checked with a real run: the actual API on PostgreSQL, with an approved payment the network does not know, ten minutes
+  old. The sweep kept failing to capture it, and within a minute the alert worker sent the URGENT email through a local
+  mail server to two addresses.
+- Tests: 18 for the new checks (the exact texts, the 30-minute edge, the seven-day edge, clearing when the sweep
+  finishes the job, settings, no customer details, the email and the all clear), one for each store, and one through the
+  console endpoint. 24 deliberate breakages of the checks, settings, summary and both stores are all caught.
+
 ## 2026-11-28 — Decisions recorded as working assumptions, and a compliance backlog
 
 - **Milestone 1 is accepted, and the five assumptions are confirmed.** Sandbox only, now a hard rule: no real card, UPI or

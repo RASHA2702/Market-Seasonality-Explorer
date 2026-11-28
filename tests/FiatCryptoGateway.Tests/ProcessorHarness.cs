@@ -147,6 +147,9 @@ public sealed class FlakyAttemptStore(IPaymentAttemptStore inner) : IPaymentAtte
     public Task<IReadOnlyList<PaymentAttempt>> ListStuckAuthorizedAsync(DateTimeOffset cutoff, int limit, CancellationToken cancellationToken) =>
         inner.ListStuckAuthorizedAsync(cutoff, limit, cancellationToken);
 
+    public Task<IReadOnlyList<PaymentAttempt>> ListLapsedAsync(DateTimeOffset since, int limit, CancellationToken cancellationToken) =>
+        inner.ListLapsedAsync(since, limit, cancellationToken);
+
     public Task<IReadOnlyList<PaymentAttempt>> ListPendingExpiredAsync(DateTimeOffset now, int limit, CancellationToken cancellationToken) =>
         inner.ListPendingExpiredAsync(now, limit, cancellationToken);
 

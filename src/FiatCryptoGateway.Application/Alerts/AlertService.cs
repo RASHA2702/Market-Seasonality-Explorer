@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using FiatCryptoGateway.Application.Compliance;
 using FiatCryptoGateway.Application.Configuration;
+using FiatCryptoGateway.Application.Payments;
 using FiatCryptoGateway.Application.Ports;
 using FiatCryptoGateway.Application.Reconciliation;
 using FiatCryptoGateway.Application.Settlement;
@@ -35,20 +36,26 @@ public interface IAlertSender
 }
 
 /// <summary>
-/// What needs a person now: held payments and new wallets waiting long for review, reconciliation differences,
-/// notifications the gateway gave up on in the last day, and failed or missing backups. Texts carry no customer
-/// details: short order IDs, merchants and counts only.
+/// What needs a person now: held payments and new wallets waiting long for review, payments stuck between the network
+/// and the order, reconciliation differences, notifications the gateway gave up on in the last day, and failed or
+/// missing backups. A stuck payment is urgent: a customer's money is involved and the merchant has not been paid. Texts
+/// carry no customer details: short order IDs, merchants and counts only.
 /// </summary>
 public sealed class AlertChecks(
     ComplianceReviewService reviews,
     SettlementService settlement,
+    IPaymentAttemptStore attempts,
     IReconciliationStore reconciliation,
     IOutbox outbox,
     IBackupRunStore backups,
     IOptions<AlertOptions> options,
     IOptions<ComplianceOptions> compliance,
+    IOptions<ProcessorOptions> processor,
     TimeProvider time) : IAlertSource
 {
+    /// <summary>The most stuck payments of each kind named at once; a flood is worth one look, not hundreds of lines.</summary>
+    private const int MaximumPerKind = 200;
+
     private readonly DateTimeOffset _startedAt = time.GetUtcNow();
 
     public async Task<IReadOnlyList<AlertProblem>> FindAsync(CancellationToken cancellationToken)
@@ -81,6 +88,38 @@ public sealed class AlertChecks(
                 problems.Add(new($"wallet:{wallet.WalletId:N}", AlertSeverity.Warning,
                     $"A new {wallet.Network} wallet for {wallet.ClientId} has waited {Hours(now - wallet.RegisteredAt)} hours for review."));
             }
+        }
+
+        // The sweep captures approved payments and records captured ones within seconds, and gives an approval up after the
+        // lapse time. Anything past these thresholds means the sweep cannot finish, or that a customer may be debited.
+        var lapseHours = processor.Value.AuthorizationLapseHours;
+        var stuckBefore = now - TimeSpan.FromMinutes(settings.StuckPaymentAfterMinutes);
+        foreach (var uncaptured in await attempts.ListStuckAuthorizedAsync(stuckBefore, MaximumPerKind, cancellationToken))
+        {
+            problems.Add(new($"payment:uncaptured:{uncaptured.AttemptId:N}", AlertSeverity.Urgent,
+                $"A payment for order {Short(uncaptured.OrderId)} ({uncaptured.ClientId}) was approved {Minutes(now - uncaptured.UpdatedAt)} minutes ago " +
+                $"and could not be captured. The gateway keeps trying, and gives the approval up after {lapseHours} hours."));
+        }
+
+        // Oldest first, so the first one that is not old enough ends the list.
+        foreach (var unrecorded in await attempts.ListCapturedNotRecordedAsync(MaximumPerKind, cancellationToken))
+        {
+            var taken = unrecorded.CapturedAt ?? unrecorded.UpdatedAt;
+            if (taken > stuckBefore)
+            {
+                break;
+            }
+
+            problems.Add(new($"payment:unrecorded:{unrecorded.AttemptId:N}", AlertSeverity.Urgent,
+                $"Money for order {Short(unrecorded.OrderId)} ({unrecorded.ClientId}) was taken {Minutes(now - taken)} minutes ago, " +
+                "but the order has not recorded it. The gateway keeps trying."));
+        }
+
+        foreach (var lapsed in await attempts.ListLapsedAsync(now.AddDays(-settings.LapsedApprovalReportDays), MaximumPerKind, cancellationToken))
+        {
+            problems.Add(new($"payment:lapsed:{lapsed.AttemptId:N}", AlertSeverity.Urgent,
+                $"An approval for order {Short(lapsed.OrderId)} ({lapsed.ClientId}) was given up after {lapseHours} hours without being captured. " +
+                "Check the payment network's own report to be sure the customer was not debited."));
         }
 
         var latestRuns = (await reconciliation.ListAsync(day: null, limit: 60, cancellationToken))
@@ -126,6 +165,8 @@ public sealed class AlertChecks(
     private static string Short(Guid id) => id.ToString("N", CultureInfo.InvariantCulture)[..8].ToUpperInvariant();
 
     private static string Hours(TimeSpan span) => ((int)Math.Floor(span.TotalHours)).ToString(CultureInfo.InvariantCulture);
+
+    private static string Minutes(TimeSpan span) => ((int)Math.Floor(span.TotalMinutes)).ToString(CultureInfo.InvariantCulture);
 
     private static string Count(int count, string noun) =>
         count.ToString(CultureInfo.InvariantCulture) + " " + noun + (count == 1 ? string.Empty : "s");
@@ -209,7 +250,8 @@ public sealed partial class AlertService(
         {
             subject = $"{tag} All clear";
             body.AppendLine("Everything the alert check watches is back to normal: no payment or wallet has waited too long for review,")
-                .AppendLine("no reconciliation differences are open, no notification has failed in the last day, and backups are succeeding.");
+                .AppendLine("no payment is stuck or was given up, no reconciliation differences are open, no notification has failed in the last day,")
+                .AppendLine("and backups are succeeding.");
         }
         else
         {

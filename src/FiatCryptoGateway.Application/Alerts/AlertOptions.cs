@@ -26,6 +26,19 @@ public sealed class AlertOptions
     /// <summary>Report when no backup has succeeded for this long. 0: backups are not watched (no backup container).</summary>
     public int BackupMaxAgeHours { get; set; }
 
+    /// <summary>
+    /// A payment the network approved but the gateway could not capture, or one it captured but its order has not recorded,
+    /// is reported once it has been stuck this long. The gateway's own sweep keeps trying meanwhile, so this is for a sweep
+    /// that cannot finish (the network is down, or the database is).
+    /// </summary>
+    public int StuckPaymentAfterMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// An approval the gateway gave up on after <c>Gateway:Processor:AuthorizationLapseHours</c> may have left the customer
+    /// debited, so a person checks the network's own report. It is reported for this many days after it was given up.
+    /// </summary>
+    public int LapsedApprovalReportDays { get; set; } = 7;
+
     /// <summary>The reviewer console's address, linked from every email.</summary>
     public Uri? ConsoleUrl { get; set; }
 
@@ -61,6 +74,11 @@ public sealed class AlertOptionsValidator : IValidateOptions<AlertOptions>
             options.ReviewWarnAfterHours is < 0 or > 168 || options.BackupMaxAgeHours is < 0 or > 168)
         {
             failures.Add("Alerts CheckIntervalMinutes must be 1 to 60; RemindAfterHours 1 to 168; ReviewWarnAfterHours and BackupMaxAgeHours 0 to 168.");
+        }
+
+        if (options.StuckPaymentAfterMinutes is < 5 or > 1_440 || options.LapsedApprovalReportDays is < 1 or > 90)
+        {
+            failures.Add("Alerts StuckPaymentAfterMinutes must be 5 to 1440 and LapsedApprovalReportDays 1 to 90.");
         }
 
         if (options.ConsoleUrl is { } console && (!console.IsAbsoluteUri || console.Scheme is not ("https" or "http")))

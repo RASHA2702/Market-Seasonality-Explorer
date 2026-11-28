@@ -30,8 +30,8 @@ provider setting that looks live (a non-test environment or URL, or a live-looki
 | Storage | In memory (default, for development) or PostgreSQL: durable, and safe to run as several API instances. The schema enforces the same rules as the code (balanced ledger, legal state transitions, one order per quote). |
 | Containers and HTTPS | The API as a small container image (no shell, non-root, read-only), started with PostgreSQL behind an HTTPS proxy (Caddy) by one command. Caddy gets and renews certificates by itself: a local one for this machine, a public one for a real domain. The reviewer console and review API answer only from private networks (configurable), and per-client sign-in limits use the address the proxy saw, which clients cannot fake. Checked end to end in CI. |
 | Database backups | Every night (and at start), the database is dumped, restored into a scratch database and checked (the ledger balances, nothing is missing), then encrypted to a key you keep off the server. Old local copies are pruned; new ones can be copied off-site. A restore command recovers any backup into a new database, never over the live one. CI backs up, restores and compares on every push. |
-| Email alerts | Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (and again when the 24-hour limit passes), reconciliation differences, notifications given up on, and failed or missing backups. Someone is emailed when something new appears, reminded while problems stay open, and told once when all is clear. Emails carry no customer details and link to the console. |
-| Tests and CI | 717 .NET tests (43 of them against a real PostgreSQL in Docker), 70 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
+| Email alerts | Every 5 minutes the gateway checks for held payments and new wallets waiting long for review (and again when the 24-hour limit passes), payments stuck between the payment network and their order, reconciliation differences, notifications given up on, and failed or missing backups. Someone is emailed when something new appears, reminded while problems stay open, and told once when all is clear. Emails carry no customer details and link to the console. |
+| Tests and CI | 738 .NET tests (44 of them against a real PostgreSQL in Docker), 70 database constraint tests, a check of the whole container stack through the HTTPS proxy, and a secret scan, run on every push. |
 
 What it does **not** do yet, and what is needed to get there, is in
 [docs/decisions.md](docs/decisions.md).
@@ -183,6 +183,8 @@ it checks for:
 |---|---|
 | A held payment waiting for a decision | After 18 hours (`ReviewWarnAfterHours`), and again, marked URGENT, when its 24-hour limit passes. |
 | A new settlement wallet waiting for review | After 18 hours. |
+| A payment stuck between the payment network and its order | URGENT, once it has been stuck for 30 minutes (`StuckPaymentAfterMinutes`): approved but not captured, or captured but not recorded on its order. The gateway's own sweep keeps trying meanwhile. |
+| An approval the gateway gave up on | URGENT, for 7 days (`LapsedApprovalReportDays`) after the gateway gave up (24 hours after the approval): the customer may have been debited, so check the payment network's own report. |
 | A reconciliation difference | As soon as a run finds one; URGENT when the provider reports money the books do not have. |
 | A merchant notification the gateway gave up on | Within the last day. |
 | A failed database backup, or none for 26 hours | URGENT (container setup only, where backups are recorded). |
@@ -205,7 +207,7 @@ Gateway__Alerts__Smtp__Username=<from your email provider>
 Gateway__Alerts__Smtp__Password=<from your email provider>
 ```
 
-Several addresses are separated by commas. The settings are checked at startup; unencrypted SMTP is accepted only for
+Several addresses are separated by commas. How long things may wait is also a setting: `Gateway__Alerts__ReviewWarnAfterHours` (18), `Gateway__Alerts__StuckPaymentAfterMinutes` (30, from 5 to 1440), `Gateway__Alerts__LapsedApprovalReportDays` (7, from 1 to 90) and `Gateway__Alerts__RemindAfterHours` (12). The settings are checked at startup; unencrypted SMTP is accepted only for
 a mail server on the same machine. If an email cannot be sent, the next check tries again.
 
 ### Merchant webhooks

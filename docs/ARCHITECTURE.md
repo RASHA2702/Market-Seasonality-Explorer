@@ -347,10 +347,15 @@ The schema enforces in the database what the domain enforces in code:
 
 ## Alerts
 
-- **What is checked.** `AlertChecks` asks the review queue, the wallet review list, the latest reconciliation run per
-  provider and day, the notifications given up on in the last day, and (when `BackupMaxAgeHours` is set) the backup
-  container's runs in `ops.backup_run`. Each problem has a key that stays the same while it lasts and changes when it
-  gets worse (a held payment's `due` becomes `overdue`).
+- **What is checked.** `AlertChecks` asks the review queue, the wallet review list, the processor's own attempts, the
+  latest reconciliation run per provider and day, the notifications given up on in the last day, and (when
+  `BackupMaxAgeHours` is set) the backup container's runs in `ops.backup_run`. Each problem has a key that stays the
+  same while it lasts and changes when it gets worse (a held payment's `due` becomes `overdue`).
+- **Stuck payments.** Three kinds, all urgent, named by short order ID and merchant: an approval not captured, a
+  captured payment its order has not recorded (each after `StuckPaymentAfterMinutes`), and an approval given up after
+  `AuthorizationLapseHours` (for `LapsedApprovalReportDays` after it was given up; the customer may be debited, so a
+  person checks the network's own report). The processor's sweep keeps trying meanwhile, so these appear only when it
+  cannot finish. The lapsed look-up has its own partial index (migration 014).
 - **When to email.** `AlertService` compares the problems with the last email in `ops.alert_log`: new keys mean an
   email; open problems are emailed again after `RemindAfterHours`; an empty list after problems means one "all
   clear". A failed send records nothing, so the next check tries again. The check holds a lock (the order lock, on an

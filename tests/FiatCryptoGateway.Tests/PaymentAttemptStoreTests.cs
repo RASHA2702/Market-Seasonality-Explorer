@@ -154,6 +154,32 @@ public sealed class PaymentAttemptStoreTests
     }
 
     [Fact]
+    public async Task OnlyApprovalsGivenUp_AreListedOldestFirst_ForTheAlertCheck()
+    {
+        var older = await Lapsed(Start, Start.AddHours(25));
+        var newer = await Lapsed(Start.AddHours(1), Start.AddHours(26));
+        await Authorized(Start);  // still waiting to be captured
+        await Captured(Start);    // finished
+        var network = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(network, None);
+        network.Fail(DeclineCodes.RailUnavailable, Start.AddHours(26)); // a network failure is not an approval given up
+        await _store.SaveAsync(network, None);
+        var declined = New(Guid.NewGuid(), Start);
+        await _store.AddAsync(declined, None);
+        declined.Decline(DeclineCodes.DoNotHonor, Start.AddHours(26));
+        await _store.SaveAsync(declined, None);
+
+        var lapsed = await _store.ListLapsedAsync(Start, 10, None);
+
+        Assert.Equal([older.AttemptId, newer.AttemptId], lapsed.Select(attempt => attempt.AttemptId));
+        Assert.Single(await _store.ListLapsedAsync(Start, 1, None));
+
+        // Given up exactly at the start of the window counts, and a moment later does not.
+        Assert.Equal([newer.AttemptId], (await _store.ListLapsedAsync(Start.AddHours(26), 10, None)).Select(attempt => attempt.AttemptId));
+        Assert.Empty(await _store.ListLapsedAsync(Start.AddHours(26).AddTicks(1), 10, None));
+    }
+
+    [Fact]
     public async Task OnlyPendingAttempts_PastTheirTimeLimit_AreListedForExpiry()
     {
         var late = New(Guid.NewGuid(), Start);
@@ -206,6 +232,17 @@ public sealed class PaymentAttemptStoreTests
         var attempt = New(Guid.NewGuid(), at);
         await _store.AddAsync(attempt, None);
         attempt.Authorize("rail", at);
+        await _store.SaveAsync(attempt, None);
+        return attempt;
+    }
+
+    /// <summary>An approval the gateway gave up on, as the sweep does after the lapse time.</summary>
+    private async Task<PaymentAttempt> Lapsed(DateTimeOffset approvedAt, DateTimeOffset givenUpAt)
+    {
+        var attempt = New(Guid.NewGuid(), approvedAt);
+        await _store.AddAsync(attempt, None);
+        attempt.Authorize("rail", approvedAt);
+        attempt.Fail(DeclineCodes.AuthorizationLapsed, givenUpAt);
         await _store.SaveAsync(attempt, None);
         return attempt;
     }

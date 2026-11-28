@@ -290,6 +290,35 @@ public sealed class PostgresPaymentAttemptStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task OnlyApprovalsGivenUp_AreListedOldestFirst_ForTheAlertCheck()
+    {
+        await using var services = fixture.BuildServices(TimeProvider.System);
+        var store = services.GetRequiredService<IPaymentAttemptStore>();
+
+        // Times far from any other test's. Other tests may leave lapsed attempts behind, so only this test's are compared.
+        var at = new DateTimeOffset(2033, 1, 1, 9, 0, 0, TimeSpan.Zero);
+        var older = await LapsedAsync(store, await OrderAsync(services), at, at.AddHours(25));
+        var newer = await LapsedAsync(store, await OrderAsync(services), at.AddHours(1), at.AddHours(26));
+        var waiting = await ApprovedAsync(store, await OrderAsync(services), at);
+        var captured = await CapturedAsync(store, await OrderAsync(services));
+        var networkFailure = NewAttempt(await OrderAsync(services), at);
+        await store.AddAsync(networkFailure, None);
+        networkFailure.Fail(DeclineCodes.RailUnavailable, at.AddHours(26));
+        await store.SaveAsync(networkFailure, None);
+        var mine = new[] { older.AttemptId, newer.AttemptId, waiting.AttemptId, captured.AttemptId, networkFailure.AttemptId };
+
+        async Task<List<Guid>> Lapsed(DateTimeOffset since) =>
+            [.. (await store.ListLapsedAsync(since, 500, None)).Select(attempt => attempt.AttemptId).Where(mine.Contains)];
+
+        Assert.Equal([older.AttemptId, newer.AttemptId], await Lapsed(at));
+        Assert.Single(await store.ListLapsedAsync(at.AddYears(-1), 1, None));
+
+        // Given up exactly at the start of the window counts, and a moment later does not.
+        Assert.Equal([newer.AttemptId], await Lapsed(at.AddHours(26)));
+        Assert.Empty(await Lapsed(at.AddHours(26).AddMicroseconds(1)));
+    }
+
+    [Fact]
     public async Task TheDatabase_RefusesAnythingThatLooksLikeACardNumber_EvenIfTheCodeSlips()
     {
         await using var services = fixture.BuildServices(TimeProvider.System);
@@ -325,6 +354,17 @@ public sealed class PostgresPaymentAttemptStoreTests(PostgresFixture fixture)
     }
 
     /// <summary>An attempt on the order that was captured and recorded on it, ready to be refunded.</summary>
+    /// <summary>An approval the gateway gave up on, as the sweep does after the lapse time.</summary>
+    private static async Task<PaymentAttempt> LapsedAsync(IPaymentAttemptStore store, PaymentOrder order, DateTimeOffset approvedAt, DateTimeOffset givenUpAt)
+    {
+        var attempt = NewAttempt(order, approvedAt);
+        await store.AddAsync(attempt, None);
+        attempt.Authorize("rail", approvedAt);
+        attempt.Fail(DeclineCodes.AuthorizationLapsed, givenUpAt);
+        await store.SaveAsync(attempt, None);
+        return attempt;
+    }
+
     private static async Task<PaymentAttempt> CapturedAsync(IPaymentAttemptStore store, PaymentOrder order)
     {
         var attempt = NewAttempt(order, Start);

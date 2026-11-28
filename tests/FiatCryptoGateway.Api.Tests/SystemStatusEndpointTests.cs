@@ -4,6 +4,9 @@ using System.Net.Http.Json;
 using FiatCryptoGateway.Api.Alerts;
 using FiatCryptoGateway.Api.Contracts;
 using FiatCryptoGateway.Application.Alerts;
+using FiatCryptoGateway.Application.Payments;
+using FiatCryptoGateway.Application.Ports;
+using FiatCryptoGateway.Domain.Payments;
 using FiatCryptoGateway.Sandbox;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -89,6 +92,60 @@ public sealed class SystemStatusEndpointTests(GatewayApiFactory factory) : IClas
     }
 
     [Fact]
+    public async Task APaymentStuckBetweenTheNetworkAndItsOrder_IsUrgent_InTheConsole_AndInTheEmail()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 11, 28, 6, 0, 0, TimeSpan.Zero));
+        var sender = new RecordingSender();
+        using var host = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Gateway:Fiat:Provider", "Processor");
+            builder.UseSetting("Gateway:Alerts:To", "ops@example.com, second@example.com");
+            builder.UseSetting("Gateway:Alerts:From", "gateway@example.com");
+            builder.UseSetting("Gateway:Alerts:Smtp:Host", "127.0.0.1");
+            builder.UseSetting("Gateway:Alerts:Smtp:Security", "None");
+            builder.UseSetting("Gateway:Alerts:StuckPaymentAfterMinutes", "20");
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<TimeProvider>(clock);
+                services.AddSingleton<IAlertSender>(sender);
+                services.Remove(services.Single(service => service.ImplementationType == typeof(AlertWorker)));
+            });
+        });
+        using var merchant = host.CreateClient();
+        merchant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GatewayApiFactory.ClientAKey);
+        using var reviewer = await host.SignInReviewerAsync();
+        var created = await ApiFlows.CreateOrderAsync(merchant);
+        var order = (await host.Services.GetRequiredService<IOrderStore>().FindAsync(created.OrderId, None))!;
+
+        // The network approved a payment and the gateway stopped before capturing it; the network has no record of it.
+        var attempts = host.Services.GetRequiredService<IPaymentAttemptStore>();
+        var attempt = PaymentAttempt.Start(
+            Guid.NewGuid(), order.OrderId, order.ClientId, order.Quote.SourceAmount,
+            new PaymentInstrument(PaymentMethod.Upi, SandboxTestInstruments.SuccessfulUpiAddress), clock.GetUtcNow(), TimeSpan.FromMinutes(10));
+        await attempts.AddAsync(attempt, None);
+        attempt.Authorize("upi_unknown", clock.GetUtcNow());
+        await attempts.SaveAsync(attempt, None);
+
+        Assert.Empty((await GetAsync(reviewer)).Alerts.Open); // not stuck yet
+
+        clock.Advance(TimeSpan.FromMinutes(20));
+        var shortOrder = order.OrderId.ToString("N")[..8].ToUpperInvariant();
+        var problem = Assert.Single((await GetAsync(reviewer)).Alerts.Open);
+        Assert.Equal(
+            ("Urgent",
+             $"A payment for order {shortOrder} (client-a) was approved 20 minutes ago and could not be captured. The gateway keeps trying, and gives the approval up after 24 hours."),
+            (problem.Severity, problem.Text));
+
+        await host.Services.GetRequiredService<AlertService>().RunAsync(None);
+        var mail = Assert.Single(sender.Sent);
+        Assert.Equal(["ops@example.com", "second@example.com"], mail.To);
+        Assert.Equal("[Gateway Sandbox] URGENT: 1 new problem needs a person", mail.Subject);
+        Assert.Contains($"order {shortOrder} (client-a) was approved 20 minutes ago", mail.Body, StringComparison.Ordinal);
+        var emailed = Assert.Single((await GetAsync(reviewer)).Alerts.RecentEmails);
+        Assert.Equal(("Problems", 1, "1 stuck payment"), (emailed.Kind, emailed.Problems, emailed.Summary));
+    }
+
+    [Fact]
     public async Task WithoutABackupContainerOrAlertEmail_TheStatusSaysSo()
     {
         using var reviewer = await factory.SignInReviewerAsync();
@@ -123,5 +180,16 @@ public sealed class SystemStatusEndpointTests(GatewayApiFactory factory) : IClas
     private sealed class CapturingSender : IAlertSender
     {
         public Task SendAsync(AlertMessage message, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingSender : IAlertSender
+    {
+        public List<AlertMessage> Sent { get; } = [];
+
+        public Task SendAsync(AlertMessage message, CancellationToken cancellationToken)
+        {
+            Sent.Add(message);
+            return Task.CompletedTask;
+        }
     }
 }

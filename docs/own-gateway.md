@@ -106,8 +106,7 @@ Left out on purpose, and where it goes:
 
 - Netbanking and bank transfer: M5.
 - A currency check on each rail (a real UPI rail takes rupees only): when the first real rail is built.
-- An email when a payment has been stuck for long (it was only logged, and the sweep keeps trying): asked for on
-  2026-11-28 and built next.
+- An email when a payment has been stuck for long: built 2026-11-28 (see the change log). Before, it was only logged.
 - Card details on their own isolated origin, like hosted card fields: a **hard launch blocker**. No real card number is
   accepted before it is done ([compliance-backlog.md](compliance-backlog.md)).
 

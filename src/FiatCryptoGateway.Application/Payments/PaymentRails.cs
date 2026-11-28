@@ -182,6 +182,12 @@ public interface IPaymentAttemptStore
     /// <summary>Approved payments last changed at or before <paramref name="cutoff"/> whose capture did not finish, oldest first.</summary>
     Task<IReadOnlyList<PaymentAttempt>> ListStuckAuthorizedAsync(DateTimeOffset cutoff, int limit, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Approvals that were given up for want of a capture (<see cref="DeclineCodes.AuthorizationLapsed"/>) at or after
+    /// <paramref name="since"/>, oldest first. The customer may have been debited, so a person checks each one.
+    /// </summary>
+    Task<IReadOnlyList<PaymentAttempt>> ListLapsedAsync(DateTimeOffset since, int limit, CancellationToken cancellationToken);
+
     /// <summary>Attempts still waiting that have passed their time limit, oldest first.</summary>
     Task<IReadOnlyList<PaymentAttempt>> ListPendingExpiredAsync(DateTimeOffset now, int limit, CancellationToken cancellationToken);
 
