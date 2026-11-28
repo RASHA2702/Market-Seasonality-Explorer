@@ -84,7 +84,7 @@ public sealed partial class PostgresStoreTests(PostgresFixture fixture)
         var balances = LedgerBalances.Compute(entries);
         Assert.All(balances.GroupBy(balance => balance.Asset), asset => Assert.Equal(0m, asset.Sum(balance => balance.DebitMinusCredit)));
         Assert.All(
-            balances.Where(balance => balance.Account == "liabilities:customer_orders"),
+            balances.Where(balance => balance.Account is "liabilities:funds_held_for_customers" or "liabilities:payable_to_merchants"),
             balance => Assert.Equal(0m, balance.DebitMinusCredit));
     }
 

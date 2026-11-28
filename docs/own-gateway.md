@@ -181,7 +181,8 @@ answers to questions 6, 17, 19, 22, 23, 25 and 27 are in [decisions.md](decision
 - **Immutable records for at least 8 years** (the accountant to confirm).
 - **A month-end reconciliation report** shows: customer funds in = merchant payable + fees + GST + refunds in flight.
 
-Building these into the ledger comes after this record; what is built and what is not is in the change log and in
+Building these into the ledger is under way: the two customer-money accounts are built (2026-11-28); the GST lines, credit
+notes and the month-end report follow. What is built and what is not is in the change log and in
 [compliance-backlog.md](compliance-backlog.md).
 
 ## The five assumptions: confirmed (2026-11-28)

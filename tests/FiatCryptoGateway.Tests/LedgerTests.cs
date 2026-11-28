@@ -14,7 +14,7 @@ public sealed class LedgerTests
     {
         var builder = new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing("psp", Fixtures.Inr.Id), new Money(100m, Fixtures.Inr))
-            .Credit(LedgerAccount.CustomerOrders(Fixtures.Inr.Id), new Money(99m, Fixtures.Inr));
+            .Credit(LedgerAccount.FundsHeldForCustomers(Fixtures.Inr.Id), new Money(99m, Fixtures.Inr));
 
         var exception = Assert.Throws<GatewayRuleException>(() => builder.Build("TEST", null, At));
 
@@ -27,7 +27,7 @@ public sealed class LedgerTests
         // 100 INR against 100 USDC adds up numerically but is meaningless; each asset must balance.
         var builder = new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing("psp", Fixtures.Inr.Id), new Money(100m, Fixtures.Inr))
-            .Credit(LedgerAccount.CustomerOrders(Fixtures.Usdc.Id), new Money(100m, Fixtures.Usdc));
+            .Credit(LedgerAccount.PayableToMerchants(Fixtures.Usdc.Id), new Money(100m, Fixtures.Usdc));
 
         var exception = Assert.Throws<GatewayRuleException>(() => builder.Build("TEST", null, At));
 
@@ -39,7 +39,7 @@ public sealed class LedgerTests
     {
         var builder = new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing("psp", Fixtures.Usd.Id), new Money(100m, Fixtures.Inr))
-            .Credit(LedgerAccount.CustomerOrders(Fixtures.Inr.Id), new Money(100m, Fixtures.Inr));
+            .Credit(LedgerAccount.FundsHeldForCustomers(Fixtures.Inr.Id), new Money(100m, Fixtures.Inr));
 
         var exception = Assert.Throws<GatewayRuleException>(() => builder.Build("TEST", null, At));
 
@@ -52,7 +52,7 @@ public sealed class LedgerTests
         var entry = new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing("psp", Fixtures.Inr.Id), new Money(100m, Fixtures.Inr))
             .Credit(LedgerAccount.ServiceFees(Fixtures.Inr.Id), Money.Zero(Fixtures.Inr))
-            .Debit(LedgerAccount.CustomerOrders(Fixtures.Inr.Id), new Money(-100m, Fixtures.Inr))
+            .Debit(LedgerAccount.FundsHeldForCustomers(Fixtures.Inr.Id), new Money(-100m, Fixtures.Inr))
             .Build("TEST", null, At);
 
         Assert.Equal(2, entry.Lines.Count);
@@ -85,13 +85,91 @@ public sealed class LedgerTests
             Assert.Equal(0m, asset.Sum(balance => balance.DebitMinusCredit));
         }
 
-        Assert.Equal(0m, Balance(balances, "liabilities:customer_orders", Fixtures.Inr.Id));
-        Assert.Equal(0m, Balance(balances, "liabilities:customer_orders", Fixtures.Usdc.Id));
+        Assert.Equal(0m, Balance(balances, "liabilities:funds_held_for_customers", Fixtures.Inr.Id));
+        Assert.Equal(0m, Balance(balances, "liabilities:payable_to_merchants", Fixtures.Usdc.Id));
         Assert.Equal(-150m, Balance(balances, "revenue:service_fees", Fixtures.Inr.Id));
         Assert.Equal(-0.58115m, Balance(balances, "revenue:spread", Fixtures.Usdc.Id));            // 116.23 - 115.64885
         Assert.Equal(-1.5m, Balance(balances, "revenue:network_fee_recovery", Fixtures.Usdc.Id));
         Assert.Equal(0.0004m, Balance(balances, "expenses:network_fees", Fixtures.Ether.Id));      // gas, paid in ETH
         Assert.Equal(-9_850m, Balance(balances, "liabilities:liquidity_provider:test-lp", Fixtures.Inr.Id));
+    }
+
+    [Fact]
+    public void TheTwoCustomerMoneyAccounts_AreLiabilities_ApartFromTheCompanysOwnMoney()
+    {
+        var held = LedgerAccount.FundsHeldForCustomers(Fixtures.Inr.Id);
+        var payable = LedgerAccount.PayableToMerchants(Fixtures.Usdc.Id);
+        var own = new[]
+        {
+            LedgerAccount.ServiceFees(Fixtures.Inr.Id),
+            LedgerAccount.Spread(Fixtures.Usdc.Id),
+            LedgerAccount.NetworkFeeRecovery(Fixtures.Usdc.Id),
+            LedgerAccount.NetworkFees(Fixtures.Ether.Id),
+            LedgerAccount.OwnerFunding(Fixtures.Inr.Id),
+        };
+
+        Assert.Equal(("liabilities:funds_held_for_customers", Fixtures.Inr.Id), (held.Code, held.Asset));
+        Assert.Equal(("liabilities:payable_to_merchants", Fixtures.Usdc.Id), (payable.Code, payable.Asset));
+        Assert.All(own, account =>
+        {
+            Assert.DoesNotContain("liabilities", account.Code, StringComparison.Ordinal);
+            Assert.NotEqual(held.Code, account.Code);
+            Assert.NotEqual(payable.Code, account.Code);
+        });
+    }
+
+    [Fact]
+    public void CustomerMoney_IsHeldAsALiability_ThenOwedToTheMerchant_ThenSent()
+    {
+        var order = Fixtures.Order();
+        var payment = Fixtures.Payment(order);
+        var execution = Fixtures.Execution(order);
+        var transfer = Fixtures.Transfer(order);
+        order.RecordFiatPayment(payment, At);
+        order.ApplyCompliance(Fixtures.Decision(order), At);
+        order.RecordPurchase(execution, At);
+        var received = OnRampPostings.FiatReceived(order, payment, At);
+        var purchased = OnRampPostings.CryptoPurchased(order, execution, "custody", At);
+        var sent = OnRampPostings.CryptoSent(order, transfer, "custody", At);
+
+        // Paid: all of it is held for the customer, and none of it is revenue yet.
+        var afterPayment = LedgerBalances.Compute([received]);
+        Assert.Equal(-10_000m, Balance(afterPayment, "liabilities:funds_held_for_customers", Fixtures.Inr.Id));
+        Assert.DoesNotContain(afterPayment, balance => balance.Account.StartsWith("revenue:", StringComparison.Ordinal));
+
+        // Converted: the rupees are no longer held, the merchant is owed the stablecoin, and the fee is the only rupee revenue.
+        var afterPurchase = LedgerBalances.Compute([received, purchased]);
+        Assert.Equal(0m, Balance(afterPurchase, "liabilities:funds_held_for_customers", Fixtures.Inr.Id));
+        Assert.Equal(-115.64885m, Balance(afterPurchase, "liabilities:payable_to_merchants", Fixtures.Usdc.Id));
+        Assert.Equal(-150m, Balance(afterPurchase, "revenue:service_fees", Fixtures.Inr.Id));
+
+        // Sent: the merchant is owed nothing.
+        var afterSend = LedgerBalances.Compute([received, purchased, sent]);
+        Assert.Equal(0m, Balance(afterSend, "liabilities:payable_to_merchants", Fixtures.Usdc.Id));
+    }
+
+    [Fact]
+    public void CustomerMoney_ReachesRevenueOnlyThroughTheNamedFeeLines()
+    {
+        var order = Fixtures.Order();
+        var payment = Fixtures.Payment(order);
+        var execution = Fixtures.Execution(order);
+        var transfer = Fixtures.Transfer(order);
+        order.RecordFiatPayment(payment, At);
+        order.ApplyCompliance(Fixtures.Decision(order), At);
+        order.RecordPurchase(execution, At);
+        order.RecordTransfer(transfer, At);
+
+        var lines = new[]
+        {
+            OnRampPostings.FiatReceived(order, payment, At),
+            OnRampPostings.CryptoPurchased(order, execution, "custody", At),
+            OnRampPostings.CryptoSent(order, transfer, "custody", At),
+        }.SelectMany(entry => entry.Lines).ToList();
+
+        var credited = lines.Where(line => line.Side == EntrySide.Credit && line.Account.Code.StartsWith("revenue:", StringComparison.Ordinal))
+            .Select(line => line.Account.Code).Distinct().Order().ToList();
+        Assert.Equal(["revenue:network_fee_recovery", "revenue:service_fees", "revenue:spread"], credited);
     }
 
     [Fact]
@@ -106,7 +184,7 @@ public sealed class LedgerTests
         var balances = LedgerBalances.Compute([OnRampPostings.CryptoPurchased(order, execution, "custody", At)]);
 
         Assert.Equal(0.64885m, Balance(balances, "revenue:spread", Fixtures.Usdc.Id)); // a debit: the gateway absorbed it
-        Assert.Equal(-115.64885m, Balance(balances, "liabilities:customer_orders", Fixtures.Usdc.Id));
+        Assert.Equal(-115.64885m, Balance(balances, "liabilities:payable_to_merchants", Fixtures.Usdc.Id));
     }
 
     [Fact]
@@ -158,7 +236,7 @@ public sealed class LedgerTests
     {
         var builder = new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing("test-psp", Fixtures.Inr.Id), new Money(100m, Fixtures.Inr))
-            .Credit(LedgerAccount.CustomerOrders(Fixtures.Inr.Id), new Money(100m, Fixtures.Inr));
+            .Credit(LedgerAccount.FundsHeldForCustomers(Fixtures.Inr.Id), new Money(100m, Fixtures.Inr));
 
         var exception = Assert.Throws<GatewayRuleException>(() =>
             builder.Build("FIAT_RECEIVED", null, At, new ExternalReference(provider, id, new Money(amount, Fixtures.Inr), At)));

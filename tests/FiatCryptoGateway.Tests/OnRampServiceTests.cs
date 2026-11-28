@@ -327,7 +327,7 @@ public sealed class OnRampServiceTests : IDisposable
         }
 
         Assert.All(
-            balances.Where(balance => balance.Account == "liabilities:customer_orders"),
+            balances.Where(balance => balance.Account is "liabilities:funds_held_for_customers" or "liabilities:payable_to_merchants"),
             balance => Assert.Equal(0m, balance.DebitMinusCredit));
     }
 

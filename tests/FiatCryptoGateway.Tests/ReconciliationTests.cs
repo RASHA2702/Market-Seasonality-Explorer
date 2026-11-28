@@ -120,7 +120,7 @@ public sealed class ReconcilerTests
         var amount = new Money(inr, Fixtures.Inr);
         return new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing(provider, Fixtures.Inr.Id), amount)
-            .Credit(LedgerAccount.CustomerOrders(Fixtures.Inr.Id), amount)
+            .Credit(LedgerAccount.FundsHeldForCustomers(Fixtures.Inr.Id), amount)
             .Build(kind, Guid.NewGuid(), Noon, new ExternalReference(provider, reference, amount, at ?? Noon));
     }
 }

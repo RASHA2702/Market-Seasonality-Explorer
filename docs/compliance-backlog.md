@@ -65,7 +65,7 @@ Last updated: 2026-11-28.
 
 | ID | Launch blocker | Blocks | Owner | Status and next step |
 |----|----------------|--------|-------|----------------------|
-| D1 | **Client funds are a liability, never revenue; our revenue is only the fee.** Ledger accounts "funds held for customers" and "payable to merchants", kept apart from our own funds. | Real money | Accountant (signs off the chart of accounts); Engineering (build) | Not started; the next build after this record. |
+| D1 | **Client funds are a liability, never revenue; our revenue is only the fee.** Ledger accounts "funds held for customers" and "payable to merchants", kept apart from our own funds. | Real money | Accountant (signs off the chart of accounts); Engineering (build) | Built 2026-11-28: the two liability accounts replace the old single one, and a test checks that customer money reaches revenue only through the named fee lines. The accountant still signs off the chart of accounts. |
 | D2 | **GST at 18% on our fees,** the fee and the GST as separate lines on every settlement report and invoice. | Real money | Accountant (confirm the rate, the base, the invoice format and the registration); Engineering (settings and lines) | Not started; built after D1. Open: on top of the fee or inside it, and the spread. |
 | D3 | **Credit notes:** a refund reverses the fee and its GST in the same period, with a credit-note record. | Real money | Accountant; Engineering | Not started. |
 | D4 | **Interest or float income** treated as taxable service income, to be confirmed. | Real money, if we hold funds or earn interest | Accountant | The question is open. |

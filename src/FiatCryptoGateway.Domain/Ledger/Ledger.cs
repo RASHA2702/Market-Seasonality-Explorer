@@ -11,8 +11,15 @@ public enum EntrySide
 
 /// <summary>
 /// An account in one asset. Asset accounts normally carry debit balances; liability, revenue and equity
-/// accounts normally carry credit balances. Journal lines carry the order ID, so one customer-orders
-/// account per asset is enough to reconcile each order.
+/// accounts normally carry credit balances. Journal lines carry the order ID, so one account per asset is enough to
+/// reconcile each order.
+/// <para>
+/// Customer money is kept apart from the company's own. What customers have paid and what merchants are owed are
+/// liabilities (<see cref="FundsHeldForCustomers"/>, <see cref="PayableToMerchants"/>): they are never revenue and they
+/// leave the books only when they are settled or refunded. The company's own money is the revenue accounts (the
+/// service fee, the spread and the network-fee recovery), the expenses and the owner's funding. Customer money reaches a
+/// revenue account only through a named fee line of a purchase entry.
+/// </para>
 /// </summary>
 public sealed record LedgerAccount(string Code, AssetId Asset)
 {
@@ -20,7 +27,17 @@ public sealed record LedgerAccount(string Code, AssetId Asset)
 
     public static LedgerAccount HotWallet(string custodian, AssetId asset) => new($"assets:hot_wallet:{custodian}", asset);
 
-    public static LedgerAccount CustomerOrders(AssetId asset) => new("liabilities:customer_orders", asset);
+    /// <summary>
+    /// Customer money received for an order and not yet settled or refunded, in the currency the customer paid: a liability
+    /// (client funds), never revenue.
+    /// </summary>
+    public static LedgerAccount FundsHeldForCustomers(AssetId asset) => new("liabilities:funds_held_for_customers", asset);
+
+    /// <summary>
+    /// What is owed to merchants for payments that have been converted and not yet sent, in the asset the merchant is
+    /// settled in: a liability, never revenue.
+    /// </summary>
+    public static LedgerAccount PayableToMerchants(AssetId asset) => new("liabilities:payable_to_merchants", asset);
 
     public static LedgerAccount LiquidityPayable(string provider, AssetId asset) => new($"liabilities:liquidity_provider:{provider}", asset);
 
@@ -186,9 +203,9 @@ public static class LedgerBalances
 }
 
 /// <summary>
-/// The journal entries an on-ramp order produces. After completion the customer-orders liability for the
-/// order is zero in every asset: the customer's fiat paid the fee and the purchase, and the crypto bought
-/// for them was delivered plus the network fee they were charged.
+/// The journal entries an on-ramp order produces. After completion both customer-money liabilities for the order
+/// (funds held for customers, in rupees, and payable to merchants, in the stablecoin) are zero: the customer's fiat paid
+/// the fee and the purchase, and the crypto bought was delivered plus the network fee charged.
 /// </summary>
 public static class OnRampPostings
 {
@@ -199,7 +216,7 @@ public static class OnRampPostings
         var fiat = payment.Amount.Asset.Id;
         return new JournalEntryBuilder()
             .Debit(LedgerAccount.PspClearing(payment.Provider, fiat), payment.Amount)
-            .Credit(LedgerAccount.CustomerOrders(fiat), payment.Amount)
+            .Credit(LedgerAccount.FundsHeldForCustomers(fiat), payment.Amount)
             .Build(
                 EntryKinds.FiatReceived,
                 order.OrderId,
@@ -220,12 +237,12 @@ public static class OnRampPostings
         var spread = execution.CryptoReceived.Subtract(quote.GrossDestinationAmount);
 
         return new JournalEntryBuilder()
-            .Debit(LedgerAccount.CustomerOrders(fiat), quote.ServiceFee)
+            .Debit(LedgerAccount.FundsHeldForCustomers(fiat), quote.ServiceFee)
             .Credit(LedgerAccount.ServiceFees(fiat), quote.ServiceFee)
-            .Debit(LedgerAccount.CustomerOrders(fiat), quote.NetSourceAmount)
+            .Debit(LedgerAccount.FundsHeldForCustomers(fiat), quote.NetSourceAmount)
             .Credit(LedgerAccount.LiquidityPayable(execution.Provider, fiat), execution.FiatSpent)
             .Debit(LedgerAccount.HotWallet(custodian, crypto), execution.CryptoReceived)
-            .Credit(LedgerAccount.CustomerOrders(crypto), quote.GrossDestinationAmount)
+            .Credit(LedgerAccount.PayableToMerchants(crypto), quote.GrossDestinationAmount)
             .Credit(LedgerAccount.Spread(crypto), spread)
             .Build(
                 EntryKinds.CryptoPurchased,
@@ -243,7 +260,7 @@ public static class OnRampPostings
         var feeAsset = transfer.NetworkFeePaid.Asset.Id;
 
         return new JournalEntryBuilder()
-            .Debit(LedgerAccount.CustomerOrders(crypto), quote.GrossDestinationAmount)
+            .Debit(LedgerAccount.PayableToMerchants(crypto), quote.GrossDestinationAmount)
             .Credit(LedgerAccount.HotWallet(custodian, crypto), transfer.Amount)
             .Credit(LedgerAccount.NetworkFeeRecovery(crypto), quote.NetworkFee)
             .Debit(LedgerAccount.NetworkFees(feeAsset), transfer.NetworkFeePaid)
@@ -261,7 +278,7 @@ public static class OnRampPostings
         ArgumentNullException.ThrowIfNull(refund);
         var fiat = refund.Amount.Asset.Id;
         return new JournalEntryBuilder()
-            .Debit(LedgerAccount.CustomerOrders(fiat), refund.Amount)
+            .Debit(LedgerAccount.FundsHeldForCustomers(fiat), refund.Amount)
             .Credit(LedgerAccount.PspClearing(refund.Provider, fiat), refund.Amount)
             .Build(
                 EntryKinds.FiatRefunded,

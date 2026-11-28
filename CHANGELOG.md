@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-11-28 — Customer money has its own ledger accounts
+
+- **Two liability accounts replace the single `customer_orders`.** `funds_held_for_customers` holds what a customer paid
+  in rupees until it is converted or refunded; `payable_to_merchants` holds what a merchant is owed in the stablecoin
+  until it is sent. Neither is revenue, and both are apart from the company's own money (the fee, the spread, the
+  network-fee recovery, expenses and owner funding). The amounts and postings are exactly as before: only the names
+  and the meaning of each account changed.
+- Customer money reaches revenue only through the three named fee lines of a purchase entry. A test checks that, and
+  another follows one order from paid, to converted, to sent.
+- Entries already in a development database keep the old account name, so finish or discard orders in flight before
+  upgrading a sandbox database. This is your working assumption on accounting treatment (customer money in transit is a
+  liability, never revenue); the accountant signs off the chart of accounts (compliance backlog, item D1).
+
 ## 2026-11-28 — An email when a payment is stuck
 
 - **The alert check now watches the payment processor.** Three situations are emailed as URGENT, and shown in the

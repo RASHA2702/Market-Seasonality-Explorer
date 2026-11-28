@@ -79,16 +79,24 @@ Completed, Refunded and Failed are terminal. The same transitions are stored in
 
 | Entry | Debit | Credit |
 |---|---|---|
-| FIAT_RECEIVED | psp_clearing 10,000.00 INR | customer_orders 10,000.00 INR |
-| CRYPTO_PURCHASED | customer_orders 150.00 INR | service_fees 150.00 INR |
-| | customer_orders 9,850.00 INR | liquidity_provider 9,850.00 INR |
-| | hot_wallet 116.230000 USDC | customer_orders 115.648850 USDC |
+| FIAT_RECEIVED | psp_clearing 10,000.00 INR | funds_held_for_customers 10,000.00 INR |
+| CRYPTO_PURCHASED | funds_held_for_customers 150.00 INR | service_fees 150.00 INR |
+| | funds_held_for_customers 9,850.00 INR | liquidity_provider 9,850.00 INR |
+| | hot_wallet 116.230000 USDC | payable_to_merchants 115.648850 USDC |
 | | | spread 0.581150 USDC |
-| CRYPTO_SENT | customer_orders 115.648850 USDC | hot_wallet 114.148850 USDC |
+| CRYPTO_SENT | payable_to_merchants 115.648850 USDC | hot_wallet 114.148850 USDC |
 | | | network_fee_recovery 1.500000 USDC |
 | | network_fees 0.0004 ETH | hot_wallet 0.0004 ETH |
 
-Each entry balances per asset. After completion `customer_orders` is zero in INR and USDC. Gas is paid
+Each entry balances per asset. After completion `funds_held_for_customers` is zero in INR and `payable_to_merchants` is
+zero in USDC.
+
+**Customer money is kept apart from the company's own** (a working assumption pending the accountant). Two liability
+accounts hold it: `funds_held_for_customers`, what a customer paid in rupees until it is converted or refunded, and
+`payable_to_merchants`, what a merchant is owed in the stablecoin until it is sent. They are never revenue. The company's
+own money is the revenue accounts (`service_fees`, `spread`, `network_fee_recovery`), the expenses and `owner_funding`.
+Customer money reaches revenue only through the named fee lines of a purchase entry, and a test checks that. Before
+2026-11-28 one account, `customer_orders`, did both jobs; entries already in a development database keep that name. Gas is paid
 in the network's own asset (ETH), which is why a crypto asset records its `NetworkFeeAsset`. If the
 exchange fills worse than quoted, the shortfall becomes a debit to `spread`: the gateway absorbs it,
 not the customer.
