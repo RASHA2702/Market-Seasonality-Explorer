@@ -1,5 +1,22 @@
 # Change log
 
+## 2026-11-28 — Decisions recorded as working assumptions, and a compliance backlog
+
+- **Milestone 1 is accepted, and the five assumptions are confirmed.** Sandbox only, now a hard rule: no real card, UPI or
+  bank money is accepted until we hold RBI payment aggregator authorisation, or a licensed payment aggregator or bank is
+  the merchant of record and holds the money. The crypto side stays simulated, cards and UPI come first, the placeholder
+  name `gateway-processor` stays, and the partner simulator stays until you say to retire it. No sandbox-only safeguard is
+  removed.
+- **Your decisions are recorded as working assumptions** in `docs/own-gateway.md` and `docs/decisions.md`, pending written
+  advice from an Indian fintech lawyer and a chartered accountant. They are not legal or tax advice, and the rules and
+  figures are as you gave them: the legal position (the payment aggregator route, data kept in India, PCI isolation as a
+  hard launch blocker, the DPDP Act), the crypto settlement (VDA) position, the accounting treatment, and the working
+  answers for questions 6, 17, 19, 22, 23, 25 and 27.
+- **A compliance backlog** (`docs/compliance-backlog.md`): every launch blocker and prerequisite with an owner column
+  (roles until you name people), what it blocks, and what exists today. It also holds the questions to put to the lawyer
+  and the accountant in writing, and the sandbox safeguards that stay, with the tests that guard them.
+- Documents only; no code changed in this entry.
+
 ## 2026-11-28 — Customer wording: "nothing was charged" only where we know it
 
 - **The checkout page no longer claims more than we know.** "Nothing was charged" is now said only when the customer said

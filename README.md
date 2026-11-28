@@ -619,4 +619,4 @@ for test in db/tests/*.sql; do PGHOST=127.0.0.1 PGPORT=5433 PGUSER=gateway_app P
 | `src/FiatCryptoGateway.ReviewerSetup` | The command that creates a reviewer account's settings and authenticator QR code. |
 | `Dockerfile`, `docker-compose.yml`, `deploy/` | The container image, the database + API + HTTPS proxy + backup stack, the proxy's configuration (`deploy/Caddyfile`), the backup image and scripts (`deploy/backup`), and the container and backup tests. |
 | `db/` | PostgreSQL migration, runner and constraint tests. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md), the plan for [our own payment gateway](docs/own-gateway.md) and the older [partner integration design](docs/partner-integration.md). |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md), [decisions](docs/decisions.md), the plan for [our own payment gateway](docs/own-gateway.md), the [compliance backlog](docs/compliance-backlog.md) (what stands between the sample and real money, with an owner for each item) and the older [partner integration design](docs/partner-integration.md). |

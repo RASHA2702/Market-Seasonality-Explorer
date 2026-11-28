@@ -3,25 +3,62 @@
 What has been decided for the crypto payment gateway, what is proposed, and what is still open.
 
 - **ANSWERED**: you decided. Your own words are quoted where you gave them.
+- **WORKING ASSUMPTION** (or **WORKING ANSWER**): you decided it on 2026-11-28 as a default to build against,
+  **pending written advice from an Indian fintech lawyer and a chartered accountant**. It is not legal or tax advice, the
+  rules and figures in it are as you gave them (I have not checked them), and it can change when they answer.
 - **PROPOSED**: my suggested default and the reason for it. It applies until you change it.
 - **OPEN**: needed from you.
 
 **[Lawyer]** and **[Accountant]** mark points to take to your lawyer or accountant. Nothing in this
 file is legal or tax advice.
 
-Last updated: 2026-11-27.
+Last updated: 2026-11-28.
 
 ## Still needed from you
 
-- Own payment gateway (questions 3 and 11, decided 2026-11-27): confirm the five assumptions at the end of
-  [own-gateway.md](own-gateway.md), or tell me which to change. Nothing waits for a payment partner any more.
-- Question 6: a written AML/KYC policy.
-- Question 22: brand name and domain.
-- Question 25: renaming the repository.
-- Question 27: launch date, out-of-hours cover, and who checks reconciliation differences each morning.
-- Question 17: confirm the 24-hour cooling-off period for new settlement wallets, and that risky wallets may be
-  approved by you (sanctioned ones never can).
+- **Written advice** from an Indian fintech lawyer and a chartered accountant on every working assumption below, in
+  [own-gateway.md](own-gateway.md) and in [compliance-backlog.md](compliance-backlog.md). Nothing marked WORKING is final
+  until then.
+- **Names for the owners** in the compliance backlog: the principal officer and the compliance officer (today that is you,
+  question 6), the grievance officer, the out-of-hours alert owner and a second alert recipient (question 27), and the two
+  holders of the backup key (question 23).
+- Question 22: a brand name and domain, after a trademark search.
+- Question 6: say when you want me to draft the AML/KYC policy from the RBI KYC Direction, for the lawyer to review.
 - The points marked **[Lawyer]** and **[Accountant]**.
+
+## ★ Working assumptions of 2026-11-28
+
+You accepted milestone 1 and decided the following as **WORKING ASSUMPTIONS**, pending written advice from an Indian fintech
+lawyer and a chartered accountant. Not legal or tax advice. The positions are written out in
+[own-gateway.md](own-gateway.md); what stands between the sample and real money, with an owner for each item, is in
+[compliance-backlog.md](compliance-backlog.md).
+
+- **The five assumptions are confirmed.** Sandbox only, now a hard rule: no real card, UPI or bank money until we hold RBI
+  payment aggregator authorisation, or a licensed payment aggregator or bank is the merchant of record and holds the money.
+  The crypto side stays simulated until the VDA/AML position is signed off. Cards and UPI first. The placeholder name
+  `gateway-processor`, with no brand or domain use before question 22. The partner simulator stays, selectable by setting,
+  until you say to retire it. The startup guard that refuses non-sandbox rails stays, and no sandbox-only safeguard is
+  removed.
+- **Route to market.** A real bank or licensed payment aggregator plugs into the existing rail port and holds customer funds;
+  we do not hold customer money. If we ever do, an escrow account with a bank, merchant KYC/KYB, settlement timelines, a
+  grievance officer and incident reporting come first. Each is a backlog item, not code.
+- **Card data.** Card numbers, CVV and PINs are never stored. No real card is accepted until the card fields sit on an
+  isolated, certified origin or a certified provider's hosted fields: a hard launch blocker, moved from "left out".
+- **Data.** Payment data stays in India. Users' data is personal data under the DPDP Act: a privacy notice, a retention
+  schedule and a deletion process are backlog items.
+- **Customer wording.** "Nothing was charged" only where we know it; otherwise "we could not confirm a charge; if you were
+  debited, it will be reversed by your bank".
+- **Crypto settlement.** Assume we are a VDA service provider under India's anti-money-laundering law (FIU-IND registration,
+  a principal officer, KYC and a suspicious-transaction process): a launch blocker for any real crypto settlement. 1% TDS
+  under section 194S may arise on the crypto leg: a configurable ledger line, off in sandbox. Merchants bear 30% tax on VDA
+  income with no loss set-off, stated in merchant documentation as information, not advice. Each conversion's rate and time
+  is kept.
+- **Accounting.** Customer money in transit is a liability, never revenue; our revenue is only the fee. Customer funds are
+  kept apart from our own ("payable to merchants", "funds held for customers"). GST at 18% on fees, as its own line on every
+  settlement report and invoice; float income is taxable, to be confirmed. Refunds reverse the fee and its GST in the same
+  period with a credit note. Records are kept immutable for at least 8 years. A month-end report shows customer funds in =
+  merchant payable + fees + GST + refunds in flight.
+- **Open items, working answers:** questions 6, 17, 19, 22, 23, 25 and 27 below.
 
 ## ★ Product scope
 
@@ -53,6 +90,10 @@ customers pay on that page.
   project (question 11, [own-gateway.md](own-gateway.md)). It stays sandbox only, so no licence is needed for the
   sample. A real launch still needs licensed access to the real networks and the right authorisations, whoever writes
   the software.
+- **WORKING ASSUMPTION** (2026-11-28): the preferred route to market is to plug a real bank's or licensed payment
+  aggregator's adapter into the existing rail port, so the licensed partner holds customer funds and we do not. If we ever
+  hold funds ourselves, an escrow account with a bank, merchant KYC/KYB, settlement timelines, a grievance officer and
+  incident reporting are needed before launch ([compliance-backlog.md](compliance-backlog.md)).
 - **[Lawyer]** The points listed at the end of [own-gateway.md](own-gateway.md).
 
 ### 4. Launch markets and currencies, and the payment partner and price source for each
@@ -65,6 +106,9 @@ customers pay on that page.
 
 ### 5. Where is the company incorporated, and where are the customers?
 **ANSWERED**: customers in India now, worldwide later. The company is incorporated in India (2026-11-24).
+- **WORKING ASSUMPTION** (2026-11-28): assume the company is a virtual digital asset (VDA) service provider under India's
+  anti-money-laundering law: register with FIU-IND, name a principal officer, and run KYC and a suspicious-transaction
+  process. This is a launch blocker for any real crypto settlement.
 - **[Lawyer]** Which registrations your company needs (for example with FIU-IND under PMLA as a virtual
   digital asset service provider) depends on what your company itself does when a licensed partner
   handles the money and the crypto.
@@ -80,9 +124,13 @@ customers pay on that page.
 - Proposed: never share an account; give each new reviewer their own, so the log always shows who decided.
 - **[Lawyer]** How long reviewer sign-in records and review decisions must be kept, and whether some decisions
   (for example releasing frozen money) need a second person's approval.
-- Written AML/KYC policy: **OPEN**.
+- **WORKING ANSWER** (2026-11-28): write a board-approved AML/KYC policy covering KYC, KYB, sanctions screening,
+  monitoring, suspicious-transaction reporting and 5-year record keeping, drafted from the RBI KYC Direction for the
+  lawyer to review. Not drafted yet: say when you want the first draft ([compliance-backlog.md](compliance-backlog.md)).
 - **[Lawyer]** Whether your company must formally appoint officers (for example a principal officer and a
   designated director under PMLA) and what its written policy must cover.
+- **[Lawyer]** How the 5-year period for AML records, the 8-year period for accounting records and the duty to delete
+  personal data under the DPDP Act fit together.
 
 ### 7. What is the real sanctions and blocked-country list, and what happens to money from a rejected order?
 **ANSWERED** (part): money from a rejected order is frozen and reported ("Freeze and report it").
@@ -104,6 +152,9 @@ can be added later.
 **ANSWERED** (2026-11-24): personal and payment data is stored in India only.
 - When the gateway moves off your machine, its database and backups go in an Indian cloud region, and the
   partner must confirm it also keeps the data in India.
+- **WORKING ASSUMPTION** (2026-11-28): users' data is personal data under the DPDP Act. A privacy notice, a retention
+  schedule and a deletion process are backlog items ([compliance-backlog.md](compliance-backlog.md)). Card numbers, CVV and
+  PINs are never stored.
 - **[Lawyer]** India's DPDP Act, and any payment-data storage rules that apply to you or your partner.
 
 ## ★ Collecting fiat
@@ -144,6 +195,9 @@ in India; quote-lock length; minimum and maximum amounts; fees; and a test envir
 - Card policy: **PROPOSED** (cards were chosen in question 10): release stablecoins only after the provider
   confirms the payment is captured and 3-D Secure authenticated, and apply lower limits to card payments,
   because a card payment can be charged back weeks later while a crypto transfer cannot be recalled.
+- **WORKING ASSUMPTION** (2026-11-28): PCI DSS. Our own card fields count as handling card data, so no real card is ever
+  accepted until the card fields sit on an isolated, certified origin or a certified provider's hosted fields. This is a hard
+  launch blocker. Card numbers, CVV and PINs are never stored.
 
 ### 12. Price-lock window per payment method, and who absorbs price moves
 **ANSWERED** (part): "we will use stable crypto currencies." Stablecoins track the US dollar, so the
@@ -194,6 +248,10 @@ wallet-screening interface.
     it did not add while that wallet is still cooling off;
   - orders pay out only to the merchant's active wallet for the order's network, which is screened again on every
     order.
+- **WORKING ANSWER** (2026-11-28): keep both. A new payout wallet waits 24 hours, a risky wallet needs a named human
+  approver, and every decision is logged with who, when and why. Already built: the cooling-off period is a setting, and
+  every registration, approval, rejection and withdrawal is saved in a log that cannot be changed, with the person who did
+  it, the time, and a reason that every approval and rejection must include.
 - **[Lawyer]** Whether the gateway (or the partner) must prove that a merchant controls its settlement wallet
   (self-hosted wallet rules under the Travel Rule), and what may be said to a merchant whose wallet is declined.
   Merchants currently see only "UnderReview" and "NotAccepted".
@@ -217,6 +275,10 @@ wallet-screening interface.
   Payments of 5,000 or more are held for a person to review.
 - Built: these limits are enforced per customer over a rolling 24 hours and 30 days, ignoring expired and
   refunded orders. Each value is a setting (for example `Gateway__Compliance__BasicKycDailyLimit`).
+- **WORKING ANSWER** (2026-11-28): start conservative: a low cap per transaction, a daily cap per merchant, a velocity
+  limit, and a higher tier only after full KYB. Every limit is a setting. The accountant and lawyer set the final numbers.
+  The per-customer table above stays as it is; the merchant-side limits are built in milestone 2
+  ([own-gateway.md](own-gateway.md)).
 
 ## Commercials
 
@@ -225,8 +287,14 @@ wallet-screening interface.
 - **PROPOSED**: everything stays configurable. The sandbox keeps a 1.5% fee and 0.5% spread so the fee
   maths stays tested, and the 10 to 10,000 USD order range stays as a placeholder. The partner's network fee
   is shown to the payer as a separate line.
+- **WORKING ASSUMPTION** (2026-11-28): GST at 18% on our fees, with the fee and the GST as separate lines on every
+  settlement report and invoice. Interest or float income is taxable service income, to be confirmed. Refunds reverse the
+  fee and its GST in the same period, with a credit-note record. 1% TDS under section 194S may arise on the crypto leg: a
+  configurable ledger line, off in sandbox. **PROPOSED** default: the GST is added on top of the service fee (the merchant
+  pays the fee plus GST) and does not apply to the spread.
 - **[Accountant]** How fees, spread and any crypto movements are taxed and invoiced, including TDS on
-  crypto transfers.
+  crypto transfers: who deducts the TDS in our flow, whether the GST goes on top of the fee or inside it, and whether it
+  applies to the spread.
 
 ### 21. Expected volume
 **ANSWERED**: "none for now" (no estimate yet).
@@ -237,12 +305,19 @@ wallet-screening interface.
 
 ### 22. Customer experience, brand name and domain
 **ANSWERED** (part): a hosted checkout page plus an API for merchants (question 2).
+- **WORKING ANSWER** (2026-11-28): do a trademark search before any public use of a name or domain, and keep the
+  placeholder (`gateway-processor`) until it is cleared. **[Lawyer]** The trademark search.
 - Brand name and domain: **OPEN**. The checkout page shows the merchant's name and no gateway brand yet; once a
   domain is chosen, it becomes `GATEWAY_DOMAIN` for the HTTPS proxy, which then gets its certificate by itself, and
   the checkout links use it.
 
 ### 23. Hosting (cloud, region, budget)
 **ANSWERED**: "for now locally but we would have to scale up in the future if needed."
+- **WORKING ANSWER** (2026-11-28): host in India. Keep encrypted off-site backups in India too, with the `age` private key
+  held by two people (each holds a copy, so one person's absence cannot block a restore; say if you meant a split key
+  instead), and test a restore every quarter. Not done yet: the host and region are not chosen, no off-site copy is set up,
+  nobody is named as a key holder, and the quarterly restore test is not scheduled
+  ([compliance-backlog.md](compliance-backlog.md)).
 - **PROPOSED**: run locally with Docker Compose. When you move to the cloud, choose a region in India
   (see question 9).
 - Built (2026-11-26): the API as a container image, started with PostgreSQL behind an HTTPS proxy (Caddy) by one
@@ -264,16 +339,19 @@ on them; .NET's `decimal` gives exact money arithmetic; .NET 10 is a long-term s
 PostgreSQL's transactions and constraints are what keep the ledger correct.
 
 ### 25. Repository: rename or move?
-**OPEN**.
+**WORKING ANSWER** (2026-11-28): do it only after question 22 is decided, and keep a redirect.
 - **PROPOSED**: rename `Market-Seasonality-Explorer` on GitHub (Settings, General, Repository name), for
-  example to `crypto-payment-gateway`. Only you can do this; GitHub redirects the old links.
+  example to `crypto-payment-gateway`. Only you can do this; GitHub redirects the old links, as long as nobody creates a
+  new repository under the old name. The name itself waits for the trademark search in question 22.
 
 ### 26. QuantFOPlatform: keep developing it, or pause it?
 **ANSWERED** (you asked me to decide): pause it. It is in a stable state (it builds, 60 tests pass and CI is
 green on its branch), so nothing is lost, and work can resume at any time.
 
 ### 27. Operations and timeline
-**OPEN**: launch date, and who covers incidents, reviews and refunds around the clock.
+**WORKING ANSWER** (2026-11-28): no launch date until the payment aggregator position is settled. Alerts go to at least two
+people, with a named out-of-hours owner and an escalation path (who is called when the first person does not answer).
+Still **OPEN**: the people, and who covers reviews and refunds around the clock.
 - Built: daily reconciliation records every difference between providers' reports and the books, and merchant
   webhooks record deliveries that failed. Someone needs to check both each morning. A payment missing from the
   books means a customer has paid for an order that has not moved.
